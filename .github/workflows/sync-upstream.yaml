@@ -18,25 +18,29 @@ jobs:
           fetch-depth: 0
 
       - name: Add upstream remote
-        run: |
-          git remote add upstream https://github.com/tapframe/NuvioStreamsAddon.git
+        run: git remote add upstream ${{ env.UPSTREAM_REPO }}
         env:
           # Replace with the actual upstream repository URL
           # Example: https://github.com/Stremio/stremio-addon-sdk
-          UPSTREAM_REPO: https://github.com/tapframe/NuvioStreamsAddon
+          UPSTREAM_REPO: https://github.com/tapframe/NuvioStreamsAddon.git
 
       - name: Fetch upstream branches
         run: git fetch upstream
 
-      - name: Merge upstream/main into local main
-        run: git merge --no-edit upstream/main -m "Merge upstream/main into local main" || true
+      # *** CHANGE MADE HERE ***
+      - name: Merge upstream/master into local master
+        # IMPORTANT: Based on your log, the upstream branch is 'master'.
+        # Also, your local default branch is likely 'master'.
+        run: git merge --no-edit upstream/master -m "Merge upstream/master into local master" || true
         # The `|| true` allows the merge to fail if there are conflicts,
         # but the workflow will still complete without error.
         # For a clean merge, you'd typically want to handle conflicts manually.
         # However, for an automated sync, this ensures it doesn't break daily.
 
+      # *** CHANGE MADE HERE ***
       - name: Push changes to fork
-        run: git push origin main
+        # Push to your local 'master' branch, as indicated by the 'src refspec main does not match any' error.
+        run: git push origin master
 
       - name: Prevent Dockerfile Overwrite (Manual Check/Resolution)
         run: |
