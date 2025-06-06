@@ -6,22 +6,59 @@ Based on community feedback and continued development, this addon aims to offer 
 
 **This addon is for Stremio users who:**
 
-1.  Prefer direct HTTP streaming links as an alternative to debrid services.
-2.  Understand the nature of scrapers (public sources can be unreliable or change).
-3.  Are willing to configure settings, like a personal cookie, for the best experience.
+1. Prefer direct HTTP streaming links as an alternative to debrid services.
+2. Understand the nature of scrapers (public sources can be unreliable or change).
+3. Are willing to configure settings, like a personal cookie, for the best experience.
 
 **Key Features:**
 
-*   **Multiple Providers:** Access streams from ShowBox, Xprime.tv, HollyMovieHD, SoaperTV, Cuevana, Hianime (for anime), and VidSrc.
-*   **Personal Cookie Configuration:** **Extremely Recommended** for ShowBox to get the best performance, avoid shared quotas, and unlock all stream qualities (including 4K HDR/DV).
-*   **Provider & Quality Customization:** Tailor the addon to your needs by selecting active providers and setting minimum stream qualities.
-*   **No Torrents/P2P:** Nuvio Streams only scrapes direct HTTP streams.
-*   **TMDB & IMDb Support:** Works with both ID types.
-*   **User-Friendly Configuration:** All settings are managed through the addon's main page.
+* **Multiple Providers:** Access streams from ShowBox, SoaperTV, Hianime (for anime), VidSrc, Xprime.tv, and Cuevana (self-hosted only).
+* **Personal Cookie Configuration:** **Extremely Recommended** for ShowBox to get the best performance, avoid shared quotas, and unlock all stream qualities (including 4K HDR/DV).
+* **Provider & Quality Customization:** Tailor the addon to your needs by selecting active providers and setting minimum stream qualities.
+* **No Torrents/P2P:** Nuvio Streams only scrapes direct HTTP streams.
+* **TMDB & IMDb Support:** Works with both ID types.
+* **User-Friendly Configuration:** All settings are managed through the addon's main page.
+
+## Public Instances
+
+### Koyeb Instance (Primary)
+The Koyeb instance is currently the main public instance: [https://aesthetic-jodie-tapframe-ab46446c.koyeb.app/](https://aesthetic-jodie-tapframe-ab46446c.koyeb.app/)
+
+* This is a temporary solution and could hit resource limits
+* Includes ShowBox, SoaperTV, and Hianime
+* Cuevana isn't available on this public instance
+
+### Vercel Instance (Limited Duration)
+The Vercel instance is still online despite hitting resource limits: [https://nuvioaddon.vercel.app/](https://nuvioaddon.vercel.app/)
+
+* This instance could disappear at any time
+* Using the Koyeb instance or self-hosting is recommended for reliability
+
+## Important Notes for Users
+
+### ShowBox Performance
+* **Without Your Own Cookie:** You're sharing with everyone else. The 100GB monthly quota gets used up quickly, and you're limited to streams under 9GB (no 4K). Result: slow, unreliable streams with [SLOW] tag.
+* **With Your Own Cookie:** You get your own 100GB monthly quota, faster speeds, and access to all quality levels including 4K/HDR/Dolby Vision. Links show a ⚡ lightning emoji.
+
+### ShowBox Links Not Appearing?
+If ShowBox links don't appear on your first try, wait a moment and refresh. This happens because:
+* Too many uncached requests hit the ShowBox website simultaneously
+* This can trigger rate limits or temporary blocks
+* The first request might fail, but subsequent ones often succeed
+
+The second or third attempt usually works because by then, the results have been cached on our servers. This is especially common for new/popular content.
+
+### Multilingual Content
+While Nuvio has limited multilingual support (mainly through Cuevana for Spanish content), check out [WebStreamr](https://github.com/webstreamr/webstreamr) for dedicated multilingual content including Italian, Spanish, Latin American Spanish, and French.
 
 ## Self-Hosting Guide
 
-This guide will help you set up your own instance of Nuvio Streams, including both the main addon and the Hianime service (for anime content).
+Self-hosting is recommended for the best experience:
+* **Stability:** Your own instance isn't fighting with thousands of other users
+* **All Providers:** Self-hosting is the only way to get Cuevana
+* **Privacy:** Your streaming activity stays on your own system
+* **Control:** You can modify things as needed
+* **Fewer Blocks:** Your personal IP is less likely to get flagged
 
 ### Quick Deploy
 
@@ -36,15 +73,15 @@ After deploying with Vercel, you'll need to:
 
 ### Prerequisites
 
-*   [Node.js](https://nodejs.org/) (LTS version recommended)
-*   [npm](https://www.npmjs.com/) (comes with Node.js) or [yarn](https://yarnpkg.com/)
-*   Basic familiarity with command line
+* [Node.js](https://nodejs.org/) (LTS version recommended)
+* [npm](https://www.npmjs.com/) (comes with Node.js) or [yarn](https://yarnpkg.com/)
+* Basic familiarity with command line
 
 ### Step 1: Get the Code
 
 ```bash
-git clone <repository-url>
-cd nuvio-streams-addon 
+git clone https://github.com/tapframe/NuvioStreamsAddon.git
+cd NuvioStreamsAddon 
 ```
 
 ### Step 2: Install Dependencies
@@ -62,19 +99,48 @@ Create a `.env` file in the project root by copying the example:
 cp .env.example .env
 ```
 
-Edit your `.env` file with at least these essential settings:
+Edit your `.env` file with these settings:
 
 ```
 # Required: Get this from https://www.themoviedb.org/settings/api
 TMDB_API_KEY=your_tmdb_api_key_here
 
-# Optional: Enable/disable specific providers
+# Provider configuration
 ENABLE_CUEVANA_PROVIDER=false
 ENABLE_HOLLYMOVIEHD_PROVIDER=true
+ENABLE_XPRIME_PROVIDER=true
+
+# Proxy configuration for ShowBox
+SHOWBOX_PROXY_URL_VALUE=https://your-proxy-url.netlify.app/?destination= # Required if using proxy
+SHOWBOX_PROXY_URL_ALTERNATE=https://your-alternate-proxy.netlify.app/?destination= # Optional: For proxy rotation
+SHOWBOX_USE_ROTATING_PROXY=true # Optional: Enables rotation between VALUE and ALTERNATE
+
+# Proxy configuration for Xprime
+XPRIME_PROXY_URL=
+XPRIME_USE_PROXY=false
+
+# ScraperAPI integration
+USE_SCRAPER_API=true
+
+# Cache configuration
+DISABLE_CACHE=true  # Set to false in production
+DISABLE_STREAM_CACHE=true  # Set to false in production
+
+# Redis cache configuration (optional)
+REDIS_URL=redis://your-redis-host:6379
+USE_REDIS_CACHE=false  # Set to true to enable Redis caching
+
+# Hianime service URL
+HIANIME_SERVER=http://your-hianime-server:8082/fetch-hianime
 
 # Optional: Disable caching if needed
 DISABLE_CACHE=false
 ```
+
+For optimal performance in production, it's recommended to:
+1. Set `DISABLE_CACHE=false` and `DISABLE_STREAM_CACHE=false`
+2. Configure Redis for improved caching: `USE_REDIS_CACHE=true`
+3. Ensure your proxy settings are correct for your region
 
 ### Step 4: Run the Main Addon
 
@@ -135,7 +201,7 @@ The Hianime provider requires a separate service that handles the communication 
 
 #### Proxy Setup (If Providers Are Blocked in Your Region)
 
-Some providers like ShowBox or Xprime might block your server's IP. You can deploy a simple proxy:
+Some providers like ShowBox might block your server's IP. You can deploy a simple proxy:
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/p-stream/simple-proxy)
 
@@ -143,11 +209,9 @@ After deploying, add the proxy URL to your `.env` file:
 ```
 # For ShowBox
 SHOWBOX_PROXY_URL_VALUE=https://your-netlify-proxy.netlify.app/?destination=
-
-# For Xprime
-XPRIME_PROXY_URL=https://your-netlify-proxy.netlify.app
-XPRIME_USE_PROXY=true
 ```
+
+**Note for Xprime.tv:** The Netlify proxy no longer works for Xprime. Instead, use a ScraperAPI key as described in the "Xprime.tv - Using ScraperAPI" section.
 
 #### Hianime Caching (Optional)
 
@@ -166,6 +230,20 @@ The Hianime provider works in two steps:
 2. **Hianime Service Step:** Communicates with Hianime's API to find and extract stream links
 
 By self-hosting both components as described above, you have full control over the entire process.
+
+### Xprime.tv - Using ScraperAPI
+
+The Netlify proxy solution no longer works for Xprime.tv. To use Xprime.tv:
+
+1. Get a free ScraperAPI key from [ScraperAPI.com](https://www.scraperapi.com/)
+2. Enter your ScraperAPI key in the addon configuration page
+3. Select Xprime.tv in the provider selection
+
+This allows the addon to bypass Xprime's anti-scraping measures. The free tier of ScraperAPI provides enough requests for personal use.
+
+### Cuevana for LATAM Users
+
+Cuevana is only available if you self-host. Many LATAM providers need specific regional connections, which works better in a self-hosted setup. Note that free hosting platforms usually share IPs between users, so you'll likely have the same IP blocking issues. For Cuevana to work properly, requests should come from your own unique IP.
 
 ## Contributing
 
@@ -197,19 +275,31 @@ If you're interested in adding a new provider or improving an existing one:
 
 Your contributions help ensure that Nuvio Streams remains a reliable and feature-rich addon for the Stremio community!
 
+## Community Platform
+
+I'm considering starting a Discord server for Nuvio users in the near future. This would be a place to:
+* Discuss issues and troubleshooting
+* Share configuration tips
+* Help each other with setup
+* Suggest improvements
+
+This is still in the planning phase. If you're interested in helping set this up or would like to join when it launches, please let me know via DM or in the comments.
+
 ## Support Development
 
 If you find Nuvio Streams useful, please consider supporting its development. Your support helps maintain reliable streams, find new providers, and keep things running smoothly.
 
-*   **[Buy Me a Coffee](https://buymeacoffee.com/tapframe)**
+* **[Ko-Fi](https://ko-fi.com/tapframe)** (helps with server costs)
+
+**Important note about previous donations:** If you donated through Buy Me a Coffee previously, those donations have been refunded due to account verification issues on their platform. Refunds should reach your account within 7 days. Thank you so much for your support - it means a lot!
 
 You can also follow on GitHub: [https://github.com/tapframe](https://github.com/tapframe)
 
 ## Disclaimer
 
-*   Nuvio Streams is an addon that scrapes content from third-party websites. The availability, legality, and quality of the content are the responsibility of these external sites.
-*   Ensure you are complying with the terms of service of any websites being accessed and any applicable local laws.
-*   This addon is provided for educational and personal use. The developers are not responsible for any misuse.
+* Nuvio Streams is an addon that scrapes content from third-party websites. The availability, legality, and quality of the content are the responsibility of these external sites.
+* Ensure you are complying with the terms of service of any websites being accessed and any applicable local laws.
+* This addon is provided for educational and personal use. The developers are not responsible for any misuse.
 
 ## License
 

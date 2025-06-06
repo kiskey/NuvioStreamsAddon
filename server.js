@@ -30,63 +30,117 @@ app.use(express.static(path.join(__dirname, 'views')));
 // Serve static files from the 'static' directory (for videos, images, etc.)
 app.use('/static', express.static(path.join(__dirname, 'static')));
 
-app.get('/configure', (req, res) => {
+// Configure route - handles both direct access and path-based parametrized access
+app.get('*configure', (req, res) => {
     res.sendFile(path.join(__dirname, 'views', 'index.html'));
 });
 
 // Middleware to extract user-supplied cookie, region, and providers from request query
 // and make them available globally for the current request.
 app.use(async (req, res, next) => {
+    // Extract from query parameters (legacy format)
     const userSuppliedCookie = req.query.cookie;
     const userRegionPreference = req.query.region;
-    const userProvidersQuery = req.query.providers; // Get providers
-    const userMinQualitiesQuery = req.query.min_qualities; // Get min_qualities
+    const userProvidersQuery = req.query.providers;
+    const userMinQualitiesQuery = req.query.min_qualities;
+    const userScraperApiKey = req.query.scraper_api_key;
+
+    // Extract from URL path (new format for Android compatibility)
+    const pathParams = {};
+    if (req.path !== '/manifest.json' && !req.path.endsWith('/manifest.json')) {
+        // Split path into segments, ignoring empty strings
+        const pathSegments = req.path.split('/').filter(segment => segment);
+        
+        // If the last segment is manifest.json, remove it for processing
+        if (pathSegments.length > 0 && pathSegments[pathSegments.length - 1] === 'manifest.json') {
+            pathSegments.pop();
+        }
+        
+        // If the segments contain 'stream', we need to extract only the path parameters before it
+        const streamIndex = pathSegments.indexOf('stream');
+        const paramSegments = streamIndex !== -1 ? pathSegments.slice(0, streamIndex) : pathSegments;
+        
+        // Process each path segment as a parameter
+        paramSegments.forEach(segment => {
+            const paramParts = segment.split('=');
+            if (paramParts.length === 2) {
+                const [key, value] = paramParts;
+                pathParams[key] = value;
+            }
+        });
+
+        if (Object.keys(pathParams).length > 0) {
+            console.log(`[server.js] Extracted path parameters: ${JSON.stringify(pathParams)}`);
+        }
+    }
 
     // Initialize global for THIS request
     global.currentRequestConfig = {}; 
 
-    if (userSuppliedCookie) {
+    // Prioritize path parameters over query parameters
+    const cookie = pathParams.cookie || userSuppliedCookie;
+    const region = pathParams.region || userRegionPreference;
+    const providers = pathParams.providers || userProvidersQuery;
+    const minQualities = pathParams.min_qualities || userMinQualitiesQuery;
+    const scraperApiKey = pathParams.scraper_api_key || userScraperApiKey;
+
+    if (cookie) {
         try {
-            global.currentRequestConfig.cookie = decodeURIComponent(userSuppliedCookie);
+            global.currentRequestConfig.cookie = decodeURIComponent(cookie);
         } catch (e) { 
-            console.error(`[server.js] Error decoding cookie from query: ${userSuppliedCookie}`, e.message);
+            console.error(`[server.js] Error decoding cookie from request: ${cookie}`, e.message);
         }
     }
-    if (userRegionPreference) {
-        global.currentRequestConfig.region = userRegionPreference.toUpperCase();
+    if (region) {
+        global.currentRequestConfig.region = region.toUpperCase();
     }
-    if (userProvidersQuery) {
-        global.currentRequestConfig.providers = userProvidersQuery; // Store as string, addon.js will parse
+    if (providers) {
+        global.currentRequestConfig.providers = providers;
     }
-    if (userMinQualitiesQuery) {
+    if (minQualities) {
         try {
-            const decodedQualities = decodeURIComponent(userMinQualitiesQuery);
+            const decodedQualities = decodeURIComponent(minQualities);
             global.currentRequestConfig.minQualities = JSON.parse(decodedQualities);
         } catch (e) {
-            console.error(`[server.js] Error parsing min_qualities from query: ${userMinQualitiesQuery}`, e.message);
-            // Optionally, you could set a default or an error indicator here
-            // For now, if it fails to parse, it simply won't be set.
+            console.error(`[server.js] Error parsing min_qualities from request: ${minQualities}`, e.message);
+        }
+    }
+    if (scraperApiKey) {
+        try {
+            global.currentRequestConfig.scraper_api_key = decodeURIComponent(scraperApiKey);
+        } catch (e) {
+            console.error(`[server.js] Error decoding scraper_api_key from request: ${scraperApiKey}`, e.message);
         }
     }
 
     if (Object.keys(global.currentRequestConfig).length > 0) {
-        console.log(`[server.js] Set global.currentRequestConfig for this request: ${JSON.stringify(global.currentRequestConfig)}`);
-    } else {
-        // console.log('[server.js] No cookie, region, or providers in query for global.currentRequestConfig.');
+        // Mask sensitive information in logs
+        const configForLog = {...global.currentRequestConfig};
+        if (configForLog.cookie) configForLog.cookie = `[PRESENT: ${configForLog.cookie.substring(0, 10)}...]`;
+        if (configForLog.scraper_api_key) configForLog.scraper_api_key = '[PRESENT]';
+        
+        console.log(`[server.js] Set global.currentRequestConfig for this request: ${JSON.stringify(configForLog)}`);
+        
+        // Debug logging for stream requests
+        if (req.path.includes('stream') || req.url.includes('stream')) {
+            console.log(`[server.js] STREAM REQUEST detected - URL: ${req.url}`);
+            console.log(`[server.js] STREAM REQUEST parameters - Path: ${JSON.stringify(pathParams)}, Query: ${JSON.stringify(req.query)}`);
+        }
     }
 
-    // Log the full URL for debugging (mask the cookie value)
+    // Log the full URL for debugging (mask the cookie value and API key for privacy)
     const fullUrl = req.originalUrl || req.url;
-    const maskedUrl = fullUrl.replace(/cookie=([^&]+)/, 'cookie=[MASKED]');
+    let maskedUrl = fullUrl.replace(/cookie=([^&/]+)/g, 'cookie=[MASKED]');
+    maskedUrl = maskedUrl.replace(/scraper_api_key=([^&/]+)/g, 'scraper_api_key=[MASKED]');
+    
     // Only log for relevant paths to reduce noise
-    if (req.path.startsWith('/manifest') || req.path.startsWith('/stream')) {
+    if (req.path.includes('/manifest.json') || req.path.startsWith('/stream')) {
         console.log(`Incoming request: ${maskedUrl}`);
     }
 
     // Crucial: Clean up after the request is done
     res.on('finish', () => {
-        if (global.currentRequestConfig) { // Check if it exists before deleting
-            // console.log('[server.js] Clearing global.currentRequestConfig after request.');
+        if (global.currentRequestConfig) {
             delete global.currentRequestConfig;
         }
     });
@@ -160,16 +214,16 @@ app.post('/api/validate-cookie', async (req, res) => {
             }
         }
 
-        let shareKeyMatch = htmlContent.match(/var\s+share_key\s*=\s*['"]([a-zA-Z0-9]+)['"]/);
-        if (!shareKeyMatch) shareKeyMatch = htmlContent.match(/share_key:\s*['"]([a-zA-Z0-9]+)['"]/);
-        if (!shareKeyMatch) shareKeyMatch = htmlContent.match(/shareid\s*=\s*['"]([a-zA-Z0-9]+)['"]/);
+        let shareKeyMatch = htmlContent.match(/var\s+share_key\s*=\s*['"]([a-zA-Z0-9-]+)['"]/);
+        if (!shareKeyMatch) shareKeyMatch = htmlContent.match(/share_key:\s*['"]([a-zA-Z0-9-]+)['"]/);
+        if (!shareKeyMatch) shareKeyMatch = htmlContent.match(/shareid\s*=\s*['"]([a-zA-Z0-9-]+)['"]/);
         if (shareKeyMatch) {
             shareKey = shareKeyMatch[1];
         } else {
             // Fallback: try to get share_key from the test URL itself
             const urlParts = FEBBOX_TEST_SHARE_URL.split('/');
             const potentialKey = urlParts[urlParts.length -1];
-            if (/^[a-zA-Z0-9]+$/.test(potentialKey)) shareKey = potentialKey;
+            if (/^[a-zA-Z0-9-]+$/.test(potentialKey)) shareKey = potentialKey;
         }
 
         if (!fid || !shareKey) {
@@ -266,12 +320,32 @@ app.use((req, res, next) => {
     next();
 });
 
-// Serve a customized version of manifest.json
-app.get('/manifest.json', async (req, res) => {
+// Add middleware to specifically handle path-based parameters in stream URLs
+app.use((req, res, next) => {
+    // Check if this is a stream request with path-based parameters
+    const pathMatch = req.path.match(/^\/(.*?)\/stream\/([^\/]+)\/([^\/]+)\.json$/);
+    
+    if (pathMatch) {
+        const [, pathParams, type, id] = pathMatch;
+        console.log(`[server.js] Detected path-based stream request: ${req.path}`);
+        console.log(`[server.js] Path params: ${pathParams}, Type: ${type}, ID: ${id}`);
+        
+        // Rewrite the URL to the standard format that the SDK expects
+        const originalQuery = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+        req.url = `/stream/${type}/${id}.json${originalQuery}`;
+        
+        console.log(`[server.js] Rewritten URL: ${req.url}`);
+    }
+    
+    next();
+});
+
+// Serve a customized version of manifest.json - catch path-based format first
+app.get('*manifest.json', async (req, res) => {
     try {
-        const userCookie = req.query.cookie; // Get cookie directly from query
-        const userRegion = req.query.region; // Get region directly from query
-        const userProviders = req.query.providers; // Get providers directly from query
+        const userCookie = global.currentRequestConfig.cookie;
+        const userRegion = global.currentRequestConfig.region;
+        const userProviders = global.currentRequestConfig.providers;
 
         const originalManifest = addonInterface.manifest;
         let personalizedManifest = JSON.parse(JSON.stringify(originalManifest)); // Deep clone
@@ -286,8 +360,7 @@ app.get('/manifest.json', async (req, res) => {
 
         if (userCookie) {
             isPersonalized = true;
-            // Add/Update cookie in the manifest config (though Stremio SDK doesn't use this directly for stream handler args)
-            // It's more for informational purposes if a user inspects the installed addon's manifest JSON
+            // Add/Update cookie in the manifest config
             const cookieConfigIndex = personalizedManifest.config.findIndex(c => c.key === 'userFebBoxCookie');
             const cookieValueForManifest = userCookie.startsWith('ui=') ? userCookie : `ui=${userCookie}`;
             if (cookieConfigIndex > -1) {
@@ -343,19 +416,42 @@ app.get('/manifest.json', async (req, res) => {
                     // hidden: true // Temporarily remove hidden to observe in Stremio settings
                 });
             }
-            // Optionally, modify name/description for providers as well
-            // For now, just ensuring it's in the config for addon.js to use
             console.log(`[Manifest] Providers (${providersString}) will be part of the config.`);
+        }
 
-            // Add a test dynamic field
+        // Handle minimum qualities
+        if (global.currentRequestConfig.minQualities) {
+            isPersonalized = true;
+            const minQualitiesString = JSON.stringify(global.currentRequestConfig.minQualities);
+            const minQualitiesConfigIndex = personalizedManifest.config.findIndex(c => c.key === 'minQualities');
+            if (minQualitiesConfigIndex > -1) {
+                personalizedManifest.config[minQualitiesConfigIndex].default = minQualitiesString;
+            } else {
+                personalizedManifest.config.push({
+                    key: 'minQualities',
+                    type: 'text',
+                    title: 'Minimum Quality Settings (auto-set)',
+                    default: minQualitiesString,
+                    required: false,
+                    hidden: true
+                });
+            }
+            console.log(`[Manifest] Minimum qualities (${minQualitiesString}) will be part of the config.`);
+        }
+
+        // Handle Scraper API key
+        if (global.currentRequestConfig.scraper_api_key) {
+            isPersonalized = true;
+            // Don't show the actual key in the manifest for security reasons
             personalizedManifest.config.push({
-                key: 'testDynamicField',
+                key: 'hasScraperApiKey',
                 type: 'text',
-                title: 'Test Dynamic Field',
-                default: 'dynamicValue123',
-                required: false
+                title: 'ScraperAPI Key (Hidden for Security)',
+                default: 'true',
+                required: false,
+                hidden: true
             });
-            console.log('[Manifest] Added testDynamicField to config.');
+            console.log(`[Manifest] ScraperAPI key will be part of the config.`);
         }
 
         if (isPersonalized) {

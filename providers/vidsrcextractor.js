@@ -11,10 +11,20 @@ async function serversLoad(html) {
     const baseFrameSrc = $("iframe").attr("src") ?? "";
     if (baseFrameSrc) {
         try {
-            BASEDOM = new URL(baseFrameSrc.startsWith("//") ? "https" + baseFrameSrc : baseFrameSrc).origin;
+            const fullUrl = baseFrameSrc.startsWith("//") ? "https:" + baseFrameSrc : baseFrameSrc;
+            BASEDOM = new URL(fullUrl).origin;
         }
         catch (e) {
-            console.warn(`Failed to parse base URL from iframe src: ${baseFrameSrc}, using default: ${BASEDOM}`);
+            console.warn(`(Attempt 1) Failed to parse base URL from iframe src: ${baseFrameSrc} using new URL(), error: ${e.message}`);
+            // Attempt 2: Regex fallback for origin
+            const originMatch = (baseFrameSrc.startsWith("//") ? "https:" + baseFrameSrc : baseFrameSrc).match(/^(https?:\/\/[^/]+)/);
+            if (originMatch && originMatch[1]) {
+                BASEDOM = originMatch[1];
+                console.log(`(Attempt 2) Successfully extracted origin using regex: ${BASEDOM}`);
+            } else {
+                console.error(`(Attempt 2) Failed to extract origin using regex from: ${baseFrameSrc}. Using default: ${BASEDOM}`);
+                // Keep the default BASEDOM = "https://cloudnestra.com" if all fails
+            }
         }
     }
     $(".serversList .server").each((index, element) => {
@@ -89,6 +99,7 @@ async function PRORCPhandler(prorcp) {
                 "sec-fetch-dest": "script", "sec-fetch-mode": "no-cors", "sec-fetch-site": "same-origin",
                 'Sec-Fetch-Dest': 'iframe', "Referer": `${BASEDOM}/`, "Referrer-Policy": "origin",
             },
+            timeout: 10000
         });
         if (!prorcpFetch.ok) {
             console.error(`Failed to fetch prorcp: ${prorcpUrl}, status: ${prorcpFetch.status}`);
@@ -100,7 +111,8 @@ async function PRORCPhandler(prorcp) {
         if (match && match[1]) {
             const masterM3U8Url = match[1];
             const m3u8FileFetch = await fetch(masterM3U8Url, {
-                headers: { "Referer": prorcpUrl, "Accept": "*/*" }
+                headers: { "Referer": prorcpUrl, "Accept": "*/*" },
+                timeout: 10000
             });
             if (!m3u8FileFetch.ok) {
                 console.error(`Failed to fetch master M3U8: ${masterM3U8Url}, status: ${m3u8FileFetch.status}`);
@@ -114,6 +126,136 @@ async function PRORCPhandler(prorcp) {
     }
     catch (error) {
         console.error(`Error in PRORCPhandler for ${BASEDOM}/prorcp/${prorcp}:`, error);
+        return null;
+    }
+}
+async function SRCRCPhandler(srcrcpPath, refererForSrcrcp) {
+    try {
+        const srcrcpUrl = BASEDOM + srcrcpPath;
+        console.log(`[VidSrc - SRCRCP] Fetching: ${srcrcpUrl} (Referer: ${refererForSrcrcp})`);
+        const response = await fetch(srcrcpUrl, {
+            headers: {
+                "accept": "*/*",
+                "accept-language": "en-US,en;q=0.9",
+                "sec-ch-ua": "\"Chromium\";v=\"128\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"128\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\"",
+                "sec-fetch-dest": "iframe",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "same-origin", // This might need to be 'cross-site' if BASEDOM's origin differs from srcrcp link's origin
+                "Referer": refererForSrcrcp,
+                "Referrer-Policy": "origin",
+            },
+            timeout: 10000
+        });
+
+        if (!response.ok) {
+            console.error(`[VidSrc - SRCRCP] Failed to fetch ${srcrcpUrl}, status: ${response.status}`);
+            return null;
+        }
+
+        const responseText = await response.text();
+        console.log(`[VidSrc - SRCRCP] Response from ${srcrcpUrl} (first 500 chars): ${responseText.substring(0, 500)}`);
+
+        // Attempt 1: Check for "file: '...'" like in PRORCP
+        const fileRegex = /file:\s*'([^']*)'/gm;
+        const fileMatch = fileRegex.exec(responseText);
+        if (fileMatch && fileMatch[1]) {
+            const masterM3U8Url = fileMatch[1];
+            console.log(`[VidSrc - SRCRCP] Found M3U8 URL (via fileMatch): ${masterM3U8Url}`);
+            const m3u8FileFetch = await fetch(masterM3U8Url, {
+                headers: { "Referer": srcrcpUrl, "Accept": "*/*" },
+                timeout: 10000
+            });
+            if (!m3u8FileFetch.ok) {
+                console.error(`[VidSrc - SRCRCP] Failed to fetch master M3U8: ${masterM3U8Url}, status: ${m3u8FileFetch.status}`);
+                return null;
+            }
+            const m3u8Content = await m3u8FileFetch.text();
+            return parseMasterM3U8(m3u8Content, masterM3U8Url);
+        }
+
+        // Attempt 2: Check if the responseText itself is an M3U8 playlist
+        if (responseText.trim().startsWith("#EXTM3U")) {
+            console.log(`[VidSrc - SRCRCP] Response from ${srcrcpUrl} appears to be an M3U8 playlist directly.`);
+            return parseMasterM3U8(responseText, srcrcpUrl);
+        }
+        
+        // Attempt 3: Look for sources = [...] or sources: [...] in script tags or in JSON-like structures
+        const $ = cheerio.load(responseText);
+        let sourcesFound = null;
+        $('script').each((i, script) => {
+            const scriptContent = $(script).html();
+            if (scriptContent) {
+                // Regex for various ways sources might be defined
+                const sourcesRegexes = [
+                    /sources\s*[:=]\s*(\[[^\]]*\{(?:\s*|.*?)file\s*:\s*['"]([^'"]+)['"](?:\s*|.*?)\}[^\]]*\])/si, // extracts the URL from sources: [{file: "URL"}]
+                    /playerInstance\.setup\s*\(\s*\{\s*sources\s*:\s*(\[[^\]]*\{(?:\s*|.*?)file\s*:\s*['"]([^'"]+)['"](?:\s*|.*?)\}[^\]]*\])/si, // for playerInstance.setup({sources: [{file: "URL"}]})
+                    /file\s*:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/i, // Direct M3U8 link in a var or object e.g. file: "URL.m3u8"
+                    /src\s*:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/i, // Direct M3U8 link e.g. src: "URL.m3u8"
+                    /loadSource\(['"]([^'"]+\.m3u8[^'"]*)['"]\)/i, // For .loadSource("URL.m3u8")
+                    /new\s+Player\([^)]*\{\s*src\s*:\s*['"]([^'"]+)['"]\s*\}\s*\)/i // For new Player({src: "URL"})
+                ];
+                for (const regex of sourcesRegexes) {
+                    const sourcesMatch = scriptContent.match(regex);
+                    // For regexes that capture a JSON array-like structure in group 1 and then the URL in group 2 (first two regexes)
+                    if (regex.source.includes('file\\s*:\\s*[\'\"]([\'\"]+)[\'\"]')) { // Heuristic to identify these complex regexes
+                        if (sourcesMatch && sourcesMatch[2]) { // URL is in group 2
+                            console.log(`[VidSrc - SRCRCP] Found M3U8 URL (script complex): ${sourcesMatch[2]}`);
+                            sourcesFound = [{ quality: 'default', url: sourcesMatch[2] }];
+                            return false; // break cheerio loop
+                        }
+                    } 
+                    // For simpler regexes where URL is in group 1
+                    else if (sourcesMatch && sourcesMatch[1]) {
+                        console.log(`[VidSrc - SRCRCP] Found M3U8 URL (script simple): ${sourcesMatch[1]}`);
+                        sourcesFound = [{ quality: 'default', url: sourcesMatch[1] }];
+                        return false; // break cheerio loop
+                    }
+                }
+                 // Fallback: Look for any absolute .m3u8 URL within the script tag
+                 if (!sourcesFound) {
+                    const m3u8GenericMatch = scriptContent.match(/['"](https?:\/\/[^'"\s]+\.m3u8[^'"\s]*)['"]/i);
+                    if (m3u8GenericMatch && m3u8GenericMatch[1]) {
+                        console.log(`[VidSrc - SRCRCP] Found M3U8 URL (script generic fallback): ${m3u8GenericMatch[1]}`);
+                        sourcesFound = [{ quality: 'default', url: m3u8GenericMatch[1] }];
+                        return false; // break cheerio loop
+                    }
+                }
+            }
+        });
+
+        if (sourcesFound && sourcesFound.length > 0) {
+            // Process the first valid M3U8 URL found, or return direct links
+            const m3u8Source = sourcesFound.find(s => s.url && s.url.includes('.m3u8'));
+            if (m3u8Source) {
+                 console.log(`[VidSrc - SRCRCP] First M3U8 source from script: ${m3u8Source.url}`);
+                 // Ensure URL is absolute
+                 const absoluteM3u8Url = m3u8Source.url.startsWith('http') ? m3u8Source.url : new URL(m3u8Source.url, srcrcpUrl).href;
+                 const m3u8FileFetch = await fetch(absoluteM3u8Url, {
+                    headers: { "Referer": srcrcpUrl, "Accept": "*/*" },
+                    timeout: 10000
+                 });
+                 if (!m3u8FileFetch.ok) {
+                     console.error(`[VidSrc - SRCRCP] Failed to fetch M3U8 from script source: ${absoluteM3u8Url}, status: ${m3u8FileFetch.status}`);
+                     return null;
+                 }
+                 const m3u8Content = await m3u8FileFetch.text();
+                 return parseMasterM3U8(m3u8Content, absoluteM3u8Url);
+            } else {
+                // Assuming direct links if no .m3u8 found in the sources array
+                console.log(`[VidSrc - SRCRCP] Assuming direct links from script sources:`, sourcesFound);
+                return sourcesFound.map(s => ({
+                    quality: s.quality || s.label || 'auto',
+                    url: s.url.startsWith('http') ? s.url : new URL(s.url, srcrcpUrl).href
+                }));
+            }
+        }
+
+        console.warn(`[VidSrc - SRCRCP] No stream extraction method succeeded for ${srcrcpUrl}`);
+        return null;
+    } catch (error) {
+        console.error(`[VidSrc - SRCRCP] Error in SRCRCPhandler for ${srcrcpPath}:`, error);
         return null;
     }
 }
@@ -147,9 +289,11 @@ async function getStreamContent(id, type) {
     const embedResp = await embedRes.text();
     const { servers, title } = await serversLoad(embedResp);
     const apiResponse = [];
-    for (const server of servers) {
-        if (!server.dataHash)
-            continue;
+
+    // MODIFIED: Process servers in parallel
+    const serverPromises = servers.map(async (server) => {
+        if (!server.dataHash) return null; // Skip servers without dataHash
+
         try {
             const rcpUrl = `${BASEDOM}/rcp/${server.dataHash}`;
             const rcpRes = await fetch(rcpUrl, {
@@ -157,34 +301,57 @@ async function getStreamContent(id, type) {
             });
             if (!rcpRes.ok) {
                 console.warn(`RCP fetch failed for server ${server.name}: ${rcpRes.status}`);
-                continue;
+                return null; // Failed to fetch RCP
             }
             const rcpHtml = await rcpRes.text();
             const rcpData = await rcpGrabber(rcpHtml);
+
             if (!rcpData || !rcpData.data) {
                 console.warn(`Skipping server ${server.name} due to missing rcp data.`);
-                continue;
+                return null; // Missing RCP data
             }
+
+            let streamDetails = null;
             if (rcpData.data.startsWith("/prorcp/")) {
-                const streamDetails = await PRORCPhandler(rcpData.data.replace("/prorcp/", ""));
-                if (streamDetails && streamDetails.length > 0) {
-                    apiResponse.push({
-                        name: title, image: rcpData.metadata.image, mediaId: id,
-                        streams: streamDetails, referer: BASEDOM,
-                    });
+                streamDetails = await PRORCPhandler(rcpData.data.replace("/prorcp/", ""));
+            } else if (rcpData.data.startsWith("/srcrcp/")) {
+                if (server.name === "Superembed" || server.name === "2Embed") {
+                    console.warn(`[VidSrc] Skipping SRCRCP for known problematic server: ${server.name}`);
+                    return null; 
                 }
-                else {
-                    console.warn(`No stream details from PRORCPhandler for server ${server.name} (${rcpData.data})`);
-                }
-            }
-            else {
+                streamDetails = await SRCRCPhandler(rcpData.data, rcpUrl); // Pass rcpUrl as referer
+            } else {
                 console.warn(`Unhandled rcp data type for server ${server.name}: ${rcpData.data.substring(0, 50)}`);
+                return null; // Unhandled type
             }
-        }
-        catch (e) {
+
+            if (streamDetails && streamDetails.length > 0) {
+                return {
+                    name: title,
+                    image: rcpData.metadata.image,
+                    mediaId: id,
+                    streams: streamDetails,
+                    referer: BASEDOM,
+                };
+            } else {
+                console.warn(`No stream details from handler for server ${server.name} (${rcpData.data})`);
+                return null; // No stream details found by the handler
+            }
+        } catch (e) {
             console.error(`Error processing server ${server.name} (${server.dataHash}):`, e);
+            return null; // Error during server processing
         }
-    }
+    });
+
+    const results = await Promise.all(serverPromises);
+    // Filter out null results (failed servers or no streams) and add valid results to apiResponse
+    results.forEach(result => {
+        if (result) {
+            apiResponse.push(result);
+        }
+    });
+    // END MODIFICATION
+
     return apiResponse;
 }
 // --- Main execution logic (conditional) ---

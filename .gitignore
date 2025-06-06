@@ -47,3 +47,6 @@ pip-wheel-metadata/
 *.tar.gz
 collaboration_message.md
 .streams_cache
+important_announcement.md
+envs.zip
+qa.md

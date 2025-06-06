@@ -5,6 +5,58 @@ const cheerio = require('cheerio');
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
+const Redis = require('ioredis'); // Added for Redis
+
+// --- Redis Cache Initialization ---
+let redisClient = null;
+if (process.env.USE_REDIS_CACHE === 'true') { // Modified condition
+    try { // Added try-catch for initialization
+        console.log(`[Showbox Cache] Initializing Redis in Showbox.js. REDIS_URL from env: ${process.env.REDIS_URL ? 'exists and has value' : 'MISSING or empty'}`);
+        if (!process.env.REDIS_URL) {
+            throw new Error("REDIS_URL environment variable is not set or is empty for Showbox Redis.");
+        }
+        // console.log(`Attempting to connect to Redis at: ${process.env.REDIS_URL}`); // Original log, can be kept or removed. Let's keep it for now.
+        redisClient = new Redis(process.env.REDIS_URL, {
+            maxRetriesPerRequest: 5, // Increased from 3
+            retryStrategy(times) {
+                const delay = Math.min(times * 500, 5000);
+                return delay;
+            },
+            reconnectOnError: function(err) {
+                const targetError = 'READONLY';
+                if (err.message.includes(targetError)) {
+                    return true;
+                }
+                return false;
+            },
+            enableOfflineQueue: true,
+            enableReadyCheck: true,
+            autoResubscribe: true,
+            autoResendUnfulfilledCommands: true,
+            lazyConnect: false // Changed from true for immediate connection attempt
+        });
+
+        redisClient.on('connect', () => {
+            console.log('[Showbox Cache] Successfully connected to Redis server.'); // Added prefix for clarity
+        });
+
+        redisClient.on('error', (err) => {
+            // Using optional chaining for host and port from options as err.host/err.port might not always be populated
+            console.error(`[Showbox Redis Error] ${err.message}. Falling back to FS. Showbox Redis Opts Host: ${redisClient?.options?.host}, Port: ${redisClient?.options?.port}`);
+        });
+        
+        // Attempt an initial connection check
+        redisClient.connect().catch(err => {
+            console.error(`Initial Redis connection failed: ${err.message}. Ensure Redis is running and accessible.`);
+        });
+
+    } catch (initError) { // Catch errors from new Redis() or the explicit REDIS_URL check
+        console.error(`[Showbox Cache] Failed to initialize Redis client: ${initError.message}`);
+        redisClient = null; // Ensure client is null if initialization fails
+    }
+} else {
+    console.log("[Showbox Cache] Redis cache is disabled (USE_REDIS_CACHE is not 'true'). Using file system cache only.");
+}
 
 // --- Cookie Management ---
 let cookieIndex = 0;
@@ -207,18 +259,59 @@ const getFromCache = async (cacheKey, subDir = '') => {
         console.log(`  CACHE DISABLED: Skipping read for ${path.join(subDir, cacheKey)}`);
         return null;
     }
+
+    const fullCacheKey = subDir ? `${subDir}:${cacheKey}` : cacheKey; // Redis key format
+
+    // Try to get from Redis first
+    if (redisClient && redisClient.status === 'ready') {
+        try {
+            const redisData = await redisClient.get(fullCacheKey);
+            if (redisData !== null) {
+                console.log(`  REDIS CACHE HIT for: ${fullCacheKey}`);
+                try {
+                    return JSON.parse(redisData); // Try to parse as JSON
+                } catch (e) {
+                    return redisData; // Return as string if not JSON
+                }
+            }
+            console.log(`  REDIS CACHE MISS for: ${fullCacheKey}`);
+        } catch (redisError) {
+            console.warn(`  REDIS CACHE READ ERROR for ${fullCacheKey}: ${redisError.message}. Falling back to file system cache.`);
+        }
+    } else if (redisClient) {
+        console.log(`  Redis client not ready (status: ${redisClient.status}). Skipping Redis read for ${fullCacheKey}, trying file system.`);
+    }
+
+    // Fallback to file system cache
     const cachePath = path.join(CACHE_DIR, subDir, cacheKey);
     try {
-        const data = await fs.readFile(cachePath, 'utf-8');
-        console.log(`  CACHE HIT for: ${path.join(subDir, cacheKey)}`);
+        const fileData = await fs.readFile(cachePath, 'utf-8');
+        console.log(`  FILE SYSTEM CACHE HIT for: ${path.join(subDir, cacheKey)}`);
+        // If Redis is available, and we got a hit from file system, let's populate Redis for next time
+        if (redisClient && redisClient.status === 'ready') {
+            try {
+                let ttlSeconds = 24 * 60 * 60; // Default 24 hours, same logic as saveToCache
+                if (subDir === 'showbox_search_results') ttlSeconds = 6 * 60 * 60;
+                else if (subDir.startsWith('tmdb_')) ttlSeconds = 48 * 60 * 60;
+                else if (subDir.startsWith('febbox_')) ttlSeconds = 12 * 60 * 60;
+                else if (subDir === 'stream_sizes') ttlSeconds = 72 * 60 * 60;
+
+                await redisClient.set(fullCacheKey, fileData, 'EX', ttlSeconds);
+                console.log(`  Populated REDIS CACHE from FILE SYSTEM for: ${fullCacheKey} (TTL: ${ttlSeconds / 3600}h)`);
+            } catch (redisSetError) {
+                console.warn(`  REDIS CACHE SET ERROR (after file read) for ${fullCacheKey}: ${redisSetError.message}`);
+            }
+        }
         try {
-            return JSON.parse(data);
+            return JSON.parse(fileData);
         } catch (e) {
-            return data;
+            return fileData; // Return as string if not JSON
         }
     } catch (error) {
         if (error.code !== 'ENOENT') {
-            console.warn(`  CACHE READ ERROR for ${cacheKey}: ${error.message}`);
+            console.warn(`  FILE SYSTEM CACHE READ ERROR for ${cacheKey}: ${error.message}`);
+        } else {
+            console.log(`  FILE SYSTEM CACHE MISS for: ${path.join(subDir, cacheKey)}`);
         }
         return null;
     }
@@ -229,15 +322,44 @@ const saveToCache = async (cacheKey, content, subDir = '') => {
         console.log(`  CACHE DISABLED: Skipping write for ${path.join(subDir, cacheKey)}`);
         return;
     }
+
+    const dataToSave = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+    const fullCacheKey = subDir ? `${subDir}:${cacheKey}` : cacheKey; // Redis key format
+
+    // Attempt to save to Redis first
+    if (redisClient && redisClient.status === 'ready') {
+        try {
+            // Set a default TTL, e.g., 24 hours. Adjust as needed.
+            // ShowBox search results (subDir 'showbox_search_results') might benefit from shorter TTL like 1-6 hours.
+            // TMDB data (subDir 'tmdb_api', 'tmdb_external_id') can have longer TTL like 24-72 hours.
+            // FebBox HTML/parsed data ('febbox_page_html', 'febbox_parsed_page', 'febbox_season_folders', 'febbox_parsed_season_folders') can have medium TTL like 6-24 hours.
+            // Stream sizes ('stream_sizes') can have a longer TTL if they don't change often, or shorter if they do.
+            let ttlSeconds = 24 * 60 * 60; // Default 24 hours
+            if (subDir === 'showbox_search_results') ttlSeconds = 6 * 60 * 60; // 6 hours
+            else if (subDir.startsWith('tmdb_')) ttlSeconds = 48 * 60 * 60; // 48 hours
+            else if (subDir.startsWith('febbox_')) ttlSeconds = 12 * 60 * 60; // 12 hours
+            else if (subDir === 'stream_sizes') ttlSeconds = 72 * 60 * 60; // 72 hours
+
+
+            await redisClient.set(fullCacheKey, dataToSave, 'EX', ttlSeconds);
+            console.log(`  SAVED TO REDIS CACHE: ${fullCacheKey} (TTL: ${ttlSeconds / 3600}h)`);
+        } catch (redisError) {
+            console.warn(`  REDIS CACHE WRITE ERROR for ${fullCacheKey}: ${redisError.message}. Proceeding with file system cache.`);
+        }
+    } else if (redisClient) {
+        console.log(`  Redis client not ready (status: ${redisClient.status}). Skipping Redis write for ${fullCacheKey}.`);
+    }
+
+
+    // Always save to file system cache as a fallback or if Redis is disabled
     const fullSubDir = path.join(CACHE_DIR, subDir);
     await ensureCacheDir(fullSubDir);
     const cachePath = path.join(fullSubDir, cacheKey);
     try {
-        const dataToSave = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
         await fs.writeFile(cachePath, dataToSave, 'utf-8');
-        console.log(`  SAVED TO CACHE: ${path.join(subDir, cacheKey)}`);
+        console.log(`  SAVED TO FILE SYSTEM CACHE: ${path.join(subDir, cacheKey)}`);
     } catch (error) {
-        console.warn(`  CACHE WRITE ERROR for ${cacheKey}: ${error.message}`);
+        console.warn(`  FILE SYSTEM CACHE WRITE ERROR for ${cacheKey}: ${error.message}`);
     }
 };
 
@@ -304,6 +426,49 @@ const validateShowboxTitle = (showboxPageTitle, tmdbMainTitle, tmdbOriginalTitle
     
     console.log(`  [Validation] FAILED: No strong match. SB: "${normalizedPageTitle}" vs TMDB Titles: "${titlesToCompare.filter(t => t.length > 0).join('", "')}"`);
     return false;
+};
+
+// NEW HELPER FUNCTION: Extract TMDB image path from ShowBox detail page HTML
+const extractTmdbImagePathFromShowboxHtml = (htmlContent) => {
+    if (!htmlContent) return null;
+    // Log the beginning of the HTML content for debugging
+    console.log(`  [ImageExtract DEBUG] HTML content (first 500 chars): ${String(htmlContent).substring(0, 500)}`);
+    try {
+        const $ = cheerio.load(htmlContent);
+        const coverDiv = $('div.cover_follow');
+        if (coverDiv.length) {
+            const styleAttr = coverDiv.attr('style');
+            console.log(`  [ImageExtract DEBUG] Found div.cover_follow. Style attribute: ${styleAttr}`); // Log the style attribute
+            if (styleAttr) {
+                // MODIFIED REGEX: Made &quot; optional
+                const urlMatch = styleAttr.match(/url\((?:&quot;)?(https?:\/\/image\.tmdb\.org\/t\/p\/original)?([^&]+?)(?:&quot;)?\)/);
+                if (urlMatch && urlMatch[2]) {
+                    // Ensure it's a path, not a full URL if accidentally captured
+                    const imagePath = urlMatch[2].startsWith('/') ? urlMatch[2] : '/' + urlMatch[2];
+                    console.log(`  [ImageExtract] Extracted TMDB image path from ShowBox HTML: ${imagePath}`);
+                    return imagePath;
+                }
+            }
+        }
+    } catch (e) {
+        console.error(`  [ImageExtract] Error parsing ShowBox HTML for TMDB image: ${e.message}`);
+    }
+    console.log(`  [ImageExtract] Could not find TMDB image path in ShowBox HTML.`);
+    return null;
+};
+
+// NEW HELPER FUNCTION: Validate ShowBox TMDB image path against TMDB API backdrop paths
+const validateTmdbImage = (showboxImagePath, tmdbApiBackdropPaths = []) => {
+    if (!showboxImagePath || !tmdbApiBackdropPaths || tmdbApiBackdropPaths.length === 0) {
+        return false;
+    }
+    const match = tmdbApiBackdropPaths.some(apiPath => apiPath === showboxImagePath);
+    if (match) {
+        console.log(`  [ImageValidation] SUCCESS: ShowBox image path "${showboxImagePath}" matches a TMDB API backdrop path.`);
+    } else {
+        console.log(`  [ImageValidation] FAILED: ShowBox image path "${showboxImagePath}" does not match any of TMDB API backdrop paths (${tmdbApiBackdropPaths.slice(0,3).join(', ')}...).`);
+    }
+    return match;
 };
 
 // Function to extract special title forms for anime (e.g., Romaji)
@@ -510,66 +675,145 @@ const _searchAndExtractShowboxUrl = async (searchTerm, originalTmdbTitle, mediaY
     console.log(`  Using cleaned search term: "${cleanedSearchTerm}" (Original: "${searchTerm}")`);
 
     // Try multiple search strategies if needed
-    const searchStrategies = [
-        { term: cleanedSearchTerm, description: "cleaned search term" }
-    ];
+    const searchStrategies = [];
     
-    // For titles with "&", create specific search strategies
-    if (originalTmdbTitle.includes('&')) {
-        // Try with "and" instead of "&" (very common replacement)
-        const andTitle = originalTmdbTitle.replace(/&/g, 'and');
+    // Track strategy effectiveness (could be persisted to disk in a production system)
+    // Higher priority strategies should be tried first
+    const STRATEGY_PRIORITIES = {
+        "original_with_year": 10,
+        "cleaned_with_year": 9,
+        "special_title_with_year": 8,
+        "original_only": 7,
+        "and_replacement_with_year": 6,
+        "first_part_with_year": 5,
+        "alternative_with_year": 4,
+        "alternative_only": 3,
+        "first_word_with_year": 2,
+        "year_only": 1
+    };
+    
+    // STRATEGY 1: Original TMDB title with year (highest priority)
+    if (mediaYear) {
+        searchStrategies.push({ 
+            term: `${originalTmdbTitle} ${mediaYear}`, 
+            description: "original TMDB title with year",
+            priority: STRATEGY_PRIORITIES.original_with_year
+        });
+    }
+    
+    // STRATEGY 2: Cleaned search term with year
+    if (mediaYear) {
+        searchStrategies.push({ 
+            term: `${cleanedSearchTerm} ${mediaYear}`, 
+            description: "cleaned search term with year",
+            priority: STRATEGY_PRIORITIES.cleaned_with_year
+        });
+    } else {
+        searchStrategies.push({ 
+            term: cleanedSearchTerm, 
+            description: "cleaned search term",
+            priority: STRATEGY_PRIORITIES.cleaned_with_year
+        });
+    }
+    
+    // STRATEGY 3: Special titles (like anime romanizations) with year
+    const specialTitlesFromAll = tmdbAllTitles.filter(title => 
+        title !== originalTmdbTitle && 
+        (title.length > originalTmdbTitle.length || // Prefer longer titles
+        /[^\x00-\x7F]/.test(originalTmdbTitle)) // Or if original has non-ASCII chars
+    ).slice(0, 2); // Limit to 2 special titles
+    
+    specialTitlesFromAll.forEach((specialTitle, idx) => {
         if (mediaYear) {
-            searchStrategies.push({ term: `${andTitle} ${mediaYear}`, description: "& replaced with 'and', with year" });
-        }
-        searchStrategies.push({ term: andTitle, description: "& replaced with 'and'" });
-        
-        // Try with just the first part before "&"
-        const firstPart = originalTmdbTitle.split('&')[0].trim();
-        if (firstPart.length > 3 && mediaYear) {
-            searchStrategies.push({ term: `${firstPart} ${mediaYear}`, description: "first part before &, with year" });
-        }
-    }
-    
-    // Add TMDB title with year as a strategy (if not already in the strategies)
-    if (mediaYear && !searchStrategies.some(s => s.term === `${originalTmdbTitle} ${mediaYear}`)) {
-        searchStrategies.push({ term: `${originalTmdbTitle} ${mediaYear}`, description: "original TMDB title with year" });
-    }
-    
-    // Add all TMDB alternative titles as search strategies
-    tmdbAllTitles.forEach((altTitle, index) => {
-        if (altTitle && altTitle !== originalTmdbTitle) {
-            if (mediaYear) {
-                searchStrategies.push({ 
-                    term: `${altTitle} ${mediaYear}`, 
-                    description: `alternative title ${index+1} with year` 
-                });
-            }
             searchStrategies.push({ 
-                term: altTitle, 
-                description: `alternative title ${index+1}` 
+                term: `${specialTitle} ${mediaYear}`, 
+                description: `special title ${idx+1} with year`,
+                priority: STRATEGY_PRIORITIES.special_title_with_year
             });
         }
     });
     
-    // Add original TMDB title only
-    searchStrategies.push({ term: originalTmdbTitle, description: "original TMDB title only" });
+    // STRATEGY 4: Original TMDB title only
+    searchStrategies.push({ 
+        term: originalTmdbTitle, 
+        description: "original TMDB title only",
+        priority: STRATEGY_PRIORITIES.original_only
+    });
     
-    // Add direct year search for popular movies (especially if the title is very common)
-    if (mediaYear) {
-        searchStrategies.push({ term: mediaYear, description: "year only (for popular movies)" });
-    }
-    
-    // If the title contains multiple words, add a search with just the first part to catch shortened titles
-    const titleWords = originalTmdbTitle.split(/\s+/);
-    if (titleWords.length > 1) {
-        const firstWord = titleWords[0];
-        if (firstWord.length > 3 && !searchStrategies.some(s => s.term === firstWord)) { // Only use significant first words
+    // STRATEGY 5: For titles with "&", try "and" replacement
+    if (originalTmdbTitle.includes('&')) {
+        const andTitle = originalTmdbTitle.replace(/&/g, 'and');
+        if (mediaYear) {
             searchStrategies.push({ 
-                term: mediaYear ? `${firstWord} ${mediaYear}` : firstWord,
-                description: "first word of title" 
+                term: `${andTitle} ${mediaYear}`, 
+                description: "& replaced with 'and', with year",
+                priority: STRATEGY_PRIORITIES.and_replacement_with_year
             });
         }
     }
+    
+    // STRATEGY 6: First part before "&" with year
+    if (originalTmdbTitle.includes('&')) {
+        const firstPart = originalTmdbTitle.split('&')[0].trim();
+        if (firstPart.length > 3 && mediaYear) {
+            searchStrategies.push({ 
+                term: `${firstPart} ${mediaYear}`, 
+                description: "first part before &, with year",
+                priority: STRATEGY_PRIORITIES.first_part_with_year
+            });
+        }
+    }
+    
+    // STRATEGY 7-8: Alternative titles (limit to 2 alternatives to reduce API calls)
+    const limitedAlternatives = tmdbAllTitles
+        .filter(altTitle => altTitle && altTitle !== originalTmdbTitle)
+        .slice(0, 2);
+        
+    limitedAlternatives.forEach((altTitle, index) => {
+        if (mediaYear) {
+            searchStrategies.push({ 
+                term: `${altTitle} ${mediaYear}`, 
+                description: `alternative title ${index+1} with year`,
+                priority: STRATEGY_PRIORITIES.alternative_with_year
+            });
+        }
+        searchStrategies.push({ 
+            term: altTitle, 
+            description: `alternative title ${index+1}`,
+            priority: STRATEGY_PRIORITIES.alternative_only
+        });
+    });
+    
+    // STRATEGY 9: First word with year (for potentially shortened titles)
+    const titleWords = originalTmdbTitle.split(/\s+/);
+    if (titleWords.length > 1) {
+        const firstWord = titleWords[0];
+        if (firstWord.length > 3 && !searchStrategies.some(s => s.term === firstWord) && mediaYear) {
+            searchStrategies.push({ 
+                term: `${firstWord} ${mediaYear}`,
+                description: "first word of title with year",
+                priority: STRATEGY_PRIORITIES.first_word_with_year
+            });
+        }
+    }
+    
+    // STRATEGY 10: Year only (last resort for popular movies)
+    if (mediaYear) {
+        searchStrategies.push({ 
+            term: mediaYear, 
+            description: "year only (for popular movies)",
+            priority: STRATEGY_PRIORITIES.year_only
+        });
+    }
+    
+    // Sort strategies by priority
+    searchStrategies.sort((a, b) => b.priority - a.priority);
+    
+    // For debugging
+    console.log(`  Search strategies in order of priority:`);
+    searchStrategies.forEach((strategy, idx) => {
+        console.log(`    ${idx+1}. ${strategy.description} (Priority: ${strategy.priority}): "${strategy.term}"`);
+    });
     
     let bestResult = { url: null, score: -1, strategy: null };
     
@@ -577,13 +821,29 @@ const _searchAndExtractShowboxUrl = async (searchTerm, originalTmdbTitle, mediaY
     const allPossibleSlugs = tmdbAllTitles.map(title => slugify(title)).filter(Boolean);
     console.log(`  Generated ${allPossibleSlugs.length} possible slugs for matching: ${allPossibleSlugs.join(', ')}`);
     
+    // Track strategy effectiveness
+    const strategyResults = {};
+    
+    // Limit the number of strategies to try (to reduce API calls)
+    const MAX_STRATEGIES_TO_TRY = 5;
+    let strategiesAttempted = 0;
+    
     for (const strategy of searchStrategies) {
+        // Limit the number of strategies we try
+        if (strategiesAttempted >= MAX_STRATEGIES_TO_TRY) {
+            console.log(`  Reached maximum number of search strategies (${MAX_STRATEGIES_TO_TRY}). Stopping search.`);
+            break;
+        }
+        
+        strategiesAttempted++;
         const searchUrl = `https://www.showbox.media/search?keyword=${encodeURIComponent(strategy.term)}`;
         console.log(`  Searching ShowBox with URL: ${searchUrl} (Strategy: ${strategy.description})`);
 
         const htmlContent = await showboxScraperInstance._makeRequest(searchUrl);
         if (!htmlContent) {
             console.log(`  Failed to fetch ShowBox search results for strategy: ${strategy.description}`);
+            // Track failed strategy
+            strategyResults[strategy.description] = { success: false, score: 0 };
             continue; // Try next strategy
         }
 
@@ -738,17 +998,46 @@ const _searchAndExtractShowboxUrl = async (searchTerm, originalTmdbTitle, mediaY
                     year: bestMatch.year,
                     isCorrectType: (tmdbType === 'movie' && bestMatch.isMovie) || (tmdbType === 'tv' && bestMatch.isTv)
                 };
+                
+                // Track successful strategy
+                strategyResults[strategy.description] = { 
+                    success: true, 
+                    score: bestMatch.score,
+                    correctType: bestResult.isCorrectType
+                };
+            } else {
+                // Track strategy that didn't beat our current best
+                strategyResults[strategy.description] = { 
+                    success: true, 
+                    score: bestMatch.score,
+                    correctType: (tmdbType === 'movie' && bestMatch.isMovie) || (tmdbType === 'tv' && bestMatch.isTv),
+                    notBest: true
+                };
             }
         } else {
             console.log(`  No results found for strategy "${strategy.description}"`);
+            // Track failed strategy
+            strategyResults[strategy.description] = { success: false, score: 0 };
         }
         
-        // If we found a really good match (high score AND correct type), don't try more strategies
-        if (bestResult.score > 25 && bestResult.isCorrectType) {
-            console.log(`  Found excellent match with score ${bestResult.score.toFixed(1)} using strategy "${bestResult.strategy}", stopping search`);
+        // LOWERED THRESHOLD: If we found a good enough match (score > 20 instead of 25), stop searching
+        if (bestResult.score > 20 && bestResult.isCorrectType) {
+            console.log(`  Found good match with score ${bestResult.score.toFixed(1)} using strategy "${bestResult.strategy}", stopping search`);
             break;
         }
     }
+    
+    // Log strategy effectiveness summary
+    console.log(`  Strategy effectiveness summary:`);
+    Object.entries(strategyResults).forEach(([strategy, result]) => {
+        if (result.success) {
+            const status = result.notBest ? "Found results but not best" : 
+                          (result.correctType ? "Found correct type" : "Found wrong type");
+            console.log(`    - ${strategy}: ${status} (Score: ${result.score.toFixed(1)})`);
+        } else {
+            console.log(`    - ${strategy}: No results found`);
+        }
+    });
 
     // Final decision based on all strategies
     if (bestResult.url) {
@@ -841,6 +1130,35 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
     // Get alternative titles array, or empty array if none
     const alternativeTitles = tmdbAlternativeTitlesData?.titles || [];
     
+    // NEW: Fetch TMDB images
+    const imagesCacheKey = `tmdb-${tmdbType}-${tmdbId}-images.json`;
+    let tmdbImagesData = await getFromCache(imagesCacheKey, mainCacheSubDir);
+    let tmdbBackdropPaths = [];
+
+    if (!tmdbImagesData || process.env.DISABLE_CACHE === 'true') {
+        const imagesApiUrl = `${TMDB_BASE_URL}/${tmdbType}/${tmdbId}/images?api_key=${TMDB_API_KEY}`;
+        console.log(`  Fetching TMDB images from: ${imagesApiUrl}`);
+        try {
+            const response = await axios.get(imagesApiUrl, { timeout: 10000 });
+            tmdbImagesData = response.data;
+            if (tmdbImagesData) {
+                if (process.env.DISABLE_CACHE !== 'true') {
+                    await saveToCache(imagesCacheKey, tmdbImagesData, mainCacheSubDir);
+                }
+            }
+        } catch (error) {
+            console.log(`  Error fetching TMDB images: ${error.message}`);
+            tmdbImagesData = { backdrops: [], posters: [] }; // Default to empty if error
+        }
+    }
+    if (tmdbImagesData && tmdbImagesData.backdrops) {
+        tmdbBackdropPaths = tmdbImagesData.backdrops.map(img => img.file_path).filter(Boolean);
+        console.log(`  Collected ${tmdbBackdropPaths.length} TMDB backdrop paths.`);
+        if (tmdbBackdropPaths.length > 0) {
+            console.log(`    Sample TMDB backdrop paths: ${tmdbBackdropPaths.slice(0, 3).join(', ')}`);
+        }
+    }
+    
     // Log anime genres to help identify anime content
     if (tmdbData.genres && Array.isArray(tmdbData.genres)) {
         const animeGenre = tmdbData.genres.find(g => g.name === 'Animation');
@@ -891,6 +1209,10 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
         console.log(`    [${idx+1}] "${title}"`);
     });
     
+    const MAX_DIRECT_URL_ATTEMPTS = 3; // Configurable limit for direct URL construction
+    const titlesForDirectAttempt = allTitles.slice(0, MAX_DIRECT_URL_ATTEMPTS);
+    console.log(`  Limiting direct URL construction attempts to first ${titlesForDirectAttempt.length} titles out of ${allTitles.length} total unique titles.`);
+
     // Initialize ShowBox scraper instance
     const showboxScraperInstance = new ShowBoxScraper(regionPreference);
     const mediaTypeString = tmdbType === 'movie' ? 'movie' : 'tv';
@@ -898,10 +1220,10 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
 
     // If we have a year, try direct URL construction with all titles
     if (year) {
-        console.log(`  Attempting direct ShowBox URL construction for ${tmdbType} "${mainTitle}" (${year}) with ${allTitles.length} title variants.`);
+        console.log(`  Attempting direct ShowBox URL construction for ${tmdbType} "${mainTitle}" (${year}) with ${titlesForDirectAttempt.length} title variants.`);
         
-        // Try each title variant for direct slug construction
-        for (const candidateTitle of allTitles) {
+        // Try each title variant for direct slug construction - MODIFIED to use titlesForDirectAttempt
+        for (const candidateTitle of titlesForDirectAttempt) {
             const slug = slugify(candidateTitle);
             if (!slug) {
                 console.log(`    Skipping empty slug for title: "${candidateTitle}"`);
@@ -919,12 +1241,20 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
                 if (pageInfo && pageInfo.title) {
                     console.log(`      Extracted title from page: "${pageInfo.title}" (Source: ${pageInfo.source}, ID: ${pageInfo.id}, Type: ${pageInfo.type})`);
                     
-                    if (validateShowboxTitle(pageInfo.title, mainTitle, originalTitle, alternativeTitles)) {
-                        console.log(`      SUCCESS: Validated title for ${directShowboxUrl}. Using this URL.`);
+                    const titleIsValid = validateShowboxTitle(pageInfo.title, mainTitle, originalTitle, alternativeTitles);
+                    const showboxTmdbImagePath = extractTmdbImagePathFromShowboxHtml(htmlContent);
+                    const imageIsValid = validateTmdbImage(showboxTmdbImagePath, tmdbBackdropPaths);
+
+                    if (titleIsValid && imageIsValid) {
+                        console.log(`      SUCCESS (TITLE & IMAGE VALIDATED): Validated title and TMDB image for ${directShowboxUrl}. Using this URL.`);
                         console.timeEnd('getShowboxUrlFromTmdbInfo_total');
                         return { showboxUrl: directShowboxUrl, year: year, title: mainTitle };
+                    } else if (titleIsValid) {
+                        console.log(`      Title validated for ${directShowboxUrl}, but TMDB image did not match or was not found on ShowBox page.`);
+                        // Potentially still use this if image validation is considered optional or a bonus
+                        // For now, we require both for this direct path.
                     } else {
-                        console.log(`      Validation FAILED for title from ${directShowboxUrl}. Page title: "${pageInfo.title}", TMDB main title: "${mainTitle}".`);
+                        console.log(`      Validation FAILED for title from ${directShowboxUrl}. Page title: "${pageInfo.title}", TMDB main title: "${mainTitle}". Image validation status: ${imageIsValid}`);
                     }
                 } else {
                     console.log(`      Could not extract title or necessary info from ${directShowboxUrl}. Content ID: ${pageInfo ? pageInfo.id : 'N/A'}`);
@@ -942,8 +1272,12 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
                             // Clean up extracted title (remove " - ShowBox" etc.)
                             let cleanTitle = extractedTitle.replace(/\s*-\s*ShowBox.*$/, '').trim();
                             
-                            if (cleanTitle && validateShowboxTitle(cleanTitle, mainTitle, originalTitle, alternativeTitles)) {
-                                console.log(`      SUCCESS (fallback extraction): Validated title for ${directShowboxUrl}. Using this URL.`);
+                            const titleIsValid = validateShowboxTitle(cleanTitle, mainTitle, originalTitle, alternativeTitles);
+                            const showboxTmdbImagePath = extractTmdbImagePathFromShowboxHtml(htmlContent); // Re-extract for this fallback
+                            const imageIsValid = validateTmdbImage(showboxTmdbImagePath, tmdbBackdropPaths);
+
+                            if (cleanTitle && titleIsValid && imageIsValid) {
+                                console.log(`      SUCCESS (TITLE & IMAGE VALIDATED - fallback extraction): Validated title and TMDB image for ${directShowboxUrl}. Using this URL.`);
                                 console.timeEnd('getShowboxUrlFromTmdbInfo_total');
                                 return { showboxUrl: directShowboxUrl, year: year, title: mainTitle };
                             }
@@ -956,7 +1290,7 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
                  console.log(`    Failed to fetch content from direct URL: ${directShowboxUrl}`);
             }
         }
-        console.log(`  Direct URL construction did not yield a validated ShowBox URL for "${mainTitle}" (${year}).`);
+        console.log(`  Direct URL construction with limited titles did not yield a validated ShowBox URL for "${mainTitle}" (${year}).`);
     } else {
         console.log(`  Year not available for "${mainTitle}", skipping direct URL construction attempt.`);
     }
@@ -1018,18 +1352,46 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
         allTitles
     );
     
-    let showboxUrl = searchResult.url;
+    let candidateShowboxUrlFromSearch = searchResult.url;
     let matchScore = searchResult.score;
 
-    if (!showboxUrl) {
-        console.log(`  Could not find a ShowBox URL via search for: ${mainTitle}`);
-        console.timeEnd('getShowboxUrlFromTmdbInfo_total');
-        return null;
+    if (candidateShowboxUrlFromSearch) {
+        console.log(`  Search returned URL: ${candidateShowboxUrlFromSearch} (Score: ${matchScore > -1 ? matchScore.toFixed(1) : 'N/A'}). Performing image validation.`);
+        // Fetch HTML for the search result URL to perform image validation
+        const searchResultHtmlContent = await showboxScraperInstance._makeRequest(candidateShowboxUrlFromSearch);
+        if (searchResultHtmlContent) {
+            const pageInfo = showboxScraperInstance.extractContentIdAndType(candidateShowboxUrlFromSearch, searchResultHtmlContent);
+            const titleFromPage = pageInfo ? pageInfo.title : "Unknown (from search result page)";
+            
+            const titleIsValid = validateShowboxTitle(titleFromPage, mainTitle, originalTitle, alternativeTitles);
+            const showboxTmdbImagePath = extractTmdbImagePathFromShowboxHtml(searchResultHtmlContent);
+            const imageIsValid = validateTmdbImage(showboxTmdbImagePath, tmdbBackdropPaths);
+
+            if (titleIsValid && imageIsValid) {
+                console.log(`    SUCCESS (TITLE & IMAGE VALIDATED for search result): ${candidateShowboxUrlFromSearch}`);
+                console.timeEnd('getShowboxUrlFromTmdbInfo_total');
+                return { showboxUrl: candidateShowboxUrlFromSearch, year: year, title: mainTitle };
+            } else if (titleIsValid) {
+                console.log(`    Search result title validated, but image did not. URL: ${candidateShowboxUrlFromSearch}. Proceeding with this URL based on search score.`);
+                console.timeEnd('getShowboxUrlFromTmdbInfo_total');
+                return { showboxUrl: candidateShowboxUrlFromSearch, year: year, title: mainTitle };
+            } else {
+                console.log(`    Search result title OR image did not validate for ${candidateShowboxUrlFromSearch}. Discarding this search result due to failed post-validation.`);
+                 // Fall through to "Could not find a ShowBox URL via search"
+            }
+        } else {
+            console.log(`    Failed to fetch HTML for search result URL ${candidateShowboxUrlFromSearch}. Cannot perform image validation. Proceeding without it.`);
+            console.timeEnd('getShowboxUrlFromTmdbInfo_total');
+            return { showboxUrl: candidateShowboxUrlFromSearch, year: year, title: mainTitle };
+        }
     }
-    
-    console.log(`  Found ShowBox URL via search: ${showboxUrl} (Score: ${matchScore > -1 ? matchScore.toFixed(1) : 'N/A'})`);
+
+
+    // If execution reaches here, it means neither direct construction with validation
+    // nor search result with validation yielded a confirmed URL.
+    console.log(`  Could not find a validated ShowBox URL for: ${mainTitle}`);
     console.timeEnd('getShowboxUrlFromTmdbInfo_total');
-    return { showboxUrl: showboxUrl, year: year, title: mainTitle };
+    return null;
 };
 
 // Function to fetch sources for a single FID
@@ -1162,10 +1524,11 @@ const fetchSourcesForSingleFid = async (fidToProcess, shareKey, regionPreference
 // ShowBox scraper class
 class ShowBoxScraper {
     // MODIFICATION: Constructor accepts scraperApiKey -> MODIFICATION: Constructor no longer needs scraperApiKey
-    constructor(regionPreference = null, userCookie = null) {
+    constructor(regionPreference = null, userCookie = null, userScraperApiKey = null) {
         // Store the region preference and user cookie
         this.regionPreference = regionPreference;
         this.userCookie = userCookie;
+        this.userScraperApiKey = userScraperApiKey; // Store the ScraperAPI key
         
         // Initialize proxy rotation counter for this instance
         this.proxyCounter = Math.floor(Math.random() * 1000); // Random start to avoid patterns
@@ -1193,14 +1556,25 @@ class ShowBoxScraper {
         const primaryProxy = process.env.SHOWBOX_PROXY_URL_VALUE;
         const alternateProxy = process.env.SHOWBOX_PROXY_URL_ALTERNATE;
         
+        // Increment the counter for this instance
+        this.proxyCounter++;
+        
+        // If ScraperAPI key is available, use it for 30% of the requests
+        // (adjust percentage as needed)
+        if (this.userScraperApiKey && this.proxyCounter % 10 < 3) {
+            console.log(`[Rotating Proxy] Using ScraperAPI for request #${this.proxyCounter} (user-provided key)`);
+            // Return a function that will format the URL for ScraperAPI
+            return (url) => {
+                const scraperApiUrl = 'https://api.scraperapi.com/';
+                return `${scraperApiUrl}?api_key=${this.userScraperApiKey}&url=${encodeURIComponent(url)}&country_code=us`;
+            };
+        }
+        
         // Return direct connection if both proxies are missing
         if (!primaryProxy && !alternateProxy) return null;
         
         // If rotation disabled or alternate proxy not set, just use primary proxy
         if (!useRotatingProxy || !alternateProxy) return primaryProxy;
-        
-        // Increment the counter for this instance
-        this.proxyCounter++;
         
         // Use modulo to alternate between available proxies
         const proxyIndex = this.proxyCounter % 2;
@@ -1226,10 +1600,19 @@ class ShowBoxScraper {
         // Get the next proxy URL from the rotation
         const selectedProxy = this.getNextProxy();
         let requestUrl = url;
+        let isUsingScraperApi = false;
 
-        if (selectedProxy && selectedProxy.trim() !== '') {
-            requestUrl = `${selectedProxy}${encodeURIComponent(url)}`;
-            console.log(`ShowBoxScraper: Making request to: ${url} via Proxy: ${selectedProxy}`);
+        if (selectedProxy) {
+            if (typeof selectedProxy === 'function') {
+                // This is a ScraperAPI proxy function
+                requestUrl = selectedProxy(url);
+                isUsingScraperApi = true;
+                console.log(`ShowBoxScraper: Making request to: ${url} via ScraperAPI`);
+            } else if (selectedProxy.trim() !== '') {
+                // This is a regular proxy URL
+                requestUrl = `${selectedProxy}${encodeURIComponent(url)}`;
+                console.log(`ShowBoxScraper: Making request to: ${url} via Proxy: ${selectedProxy}`);
+            }
         } else {
             console.log(`ShowBoxScraper: Making direct request to: ${url} (no proxy available)`);
         }
@@ -1238,7 +1621,8 @@ class ShowBoxScraper {
 
         // Get the cookie with region preference if site requires it
         let cookieValue = null;
-        if (url.includes('febbox.com')) {
+        // Skip cookie for ScraperAPI requests, as it handles cookies differently
+        if (url.includes('febbox.com') && !isUsingScraperApi) {
             if (this.regionPreference) {
                 console.log(`[ShowBoxScraper] Getting cookie with explicit region preference: ${this.regionPreference}`);
                 cookieValue = await getCookieForRequest(this.regionPreference, this.userCookie);
@@ -1257,8 +1641,8 @@ class ShowBoxScraper {
             delete currentHeaders['Upgrade-Insecure-Requests'];
         }
         
-        // Add cookie to headers if available
-        if (cookieValue) {
+        // Add cookie to headers if available and not using ScraperAPI
+        if (cookieValue && !isUsingScraperApi) {
             currentHeaders['Cookie'] = `ui=${cookieValue}`;
         }
 
@@ -1420,7 +1804,7 @@ class ShowBoxScraper {
 
                 if (!directFebboxLink) {
                     const scriptContents = $('script').map((i, el) => $(el).html()).get().join('\n');
-                    const shareKeyMatch = scriptContents.match(/['"](https?:\/\/www\.febbox\.com\/share\/[a-zA-Z0-9]+)['"]/);
+                    const shareKeyMatch = scriptContents.match(/['"](https?:\/\/www\.febbox\.com\/share\/[a-zA-Z0-9-]+)['"]/);
                     if (shareKeyMatch && shareKeyMatch[1]) {
                         directFebboxLink = shareKeyMatch[1];
                     }
@@ -1544,11 +1928,13 @@ const extractFidsFromFebboxPage = async (febboxUrl, regionPreference = null, use
     }
 
     let shareKey = null;
-    const matchShareKeyUrl = febboxUrl.match(/\/share\/([a-zA-Z0-9]+)/);
+    // Update regex to include hyphens in share key pattern
+    const matchShareKeyUrl = febboxUrl.match(/\/share\/([a-zA-Z0-9-]+)/);
     if (matchShareKeyUrl) {
         shareKey = matchShareKeyUrl[1];
     } else if (contentHtml) {
-        const matchShareKeyHtml = contentHtml.match(/(?:var share_key\s*=|share_key:\s*|shareid=)"?([a-zA-Z0-9]+)"?/);
+        // Update regex to include hyphens in share key pattern
+        const matchShareKeyHtml = contentHtml.match(/(?:var share_key\s*=|share_key:\s*|shareid=)"?([a-zA-Z0-9-]+)"?/);
         if (matchShareKeyHtml) {
             shareKey = matchShareKeyHtml[1];
         }
@@ -1683,7 +2069,7 @@ const convertImdbToTmdb = async (imdbId, regionPreference = null) => {
 // Exposed API for the Stremio addon
 // This will be a function to get streams from a TMDB ID
 // MODIFICATION: Accept scraperApiKey -> MODIFICATION: Remove scraperApiKey
-const getStreamsFromTmdbId = async (tmdbType, tmdbId, seasonNum = null, episodeNum = null, regionPreference = null, userCookie = null) => {
+const getStreamsFromTmdbId = async (tmdbType, tmdbId, seasonNum = null, episodeNum = null, regionPreference = null, userCookie = null, userScraperApiKey = null) => {
     const mainTimerLabel = `getStreamsFromTmdbId_total_${tmdbType}_${tmdbId}` + (seasonNum ? `_s${seasonNum}` : '') + (episodeNum ? `_e${episodeNum}` : '');
     console.time(mainTimerLabel);
     console.log(`Getting streams for TMDB ${tmdbType}/${tmdbId}${seasonNum !== null ? `, Season ${seasonNum}` : ''}${episodeNum !== null ? `, Episode ${episodeNum}` : ''}`);
@@ -1699,7 +2085,7 @@ const getStreamsFromTmdbId = async (tmdbType, tmdbId, seasonNum = null, episodeN
     const mediaYear = tmdbInfo.year; // Year from TMDB
 
     // Then, get FebBox link from ShowBox
-    const showboxScraper = new ShowBoxScraper(regionPreference, userCookie);
+    const showboxScraper = new ShowBoxScraper(regionPreference, userCookie, userScraperApiKey);
     const febboxShareInfos = await showboxScraper.extractFebboxShareLinks(showboxUrl);
     if (!febboxShareInfos || febboxShareInfos.length === 0) {
         console.log(`No FebBox share links found for ${showboxUrl}`);
@@ -1707,13 +2093,11 @@ const getStreamsFromTmdbId = async (tmdbType, tmdbId, seasonNum = null, episodeN
         return [];
     }
     
-    // For each FebBox link, get the video sources
-    const allStreams = [];
-    
-    for (const shareInfo of febboxShareInfos) {
+    // MODIFIED: Process FebBox share links in parallel
+    const streamPromises = febboxShareInfos.map(async (shareInfo) => {
+        const streamsFromThisShareInfo = [];
         try {
             const febboxUrl = shareInfo.febbox_share_url;
-            // MODIFICATION: Construct base title, add year for movies
             let baseStreamTitle = shareInfo.showbox_title || "Unknown Title";
             if (tmdbType === 'movie' && mediaYear) {
                 baseStreamTitle = `${baseStreamTitle} (${mediaYear})`;
@@ -1721,75 +2105,72 @@ const getStreamsFromTmdbId = async (tmdbType, tmdbId, seasonNum = null, episodeN
             
             console.log(`Processing FebBox URL: ${febboxUrl} (${baseStreamTitle})`);
             
-            // For TV shows, handle season and episode
             if (tmdbType === 'tv' && seasonNum !== null) {
-                // Pass baseStreamTitle (which will be just show name for TV) and regionPreference
-                await processShowWithSeasonsEpisodes(febboxUrl, baseStreamTitle, seasonNum, episodeNum, allStreams, true, regionPreference, userCookie);
+                // Call refactored processShowWithSeasonsEpisodes (which now returns streams)
+                const tvStreams = await processShowWithSeasonsEpisodes(febboxUrl, baseStreamTitle, seasonNum, episodeNum, true, regionPreference, userCookie);
+                streamsFromThisShareInfo.push(...tvStreams);
             } else {
-                // Handle movies or TV shows without season/episode specified (old behavior)
-                // Extract FIDs from FebBox page - Pass regionPreference
-                try {
-                    const { fids, shareKey, directSources } = await extractFidsFromFebboxPage(febboxUrl, regionPreference, userCookie);
-                    
-                    // If we have direct sources from player setup
-                    if (directSources && directSources.length > 0) {
-                        for (const source of directSources) {
-                            const streamTitle = `${baseStreamTitle} - ${source.label}`;
-                            let key5FromDirectSource = null;
-                            try {
-                                const urlParams = new URLSearchParams(new URL(source.url).search);
-                                if (urlParams.has('KEY5')) {
-                                    key5FromDirectSource = urlParams.get('KEY5');
-                                }
-                            } catch(e) { /* ignore if URL parsing fails */ }
-                            allStreams.push({
-                                title: streamTitle, 
-                                url: source.url,
-                                quality: parseQualityFromLabel(source.label),
-                                codecs: extractCodecDetails(key5FromDirectSource || streamTitle) 
-                            });
-                        }
-                        continue; // Skip FID processing if we have direct sources
+                // Handle movies or TV shows without season/episode specified
+                const { fids, shareKey, directSources } = await extractFidsFromFebboxPage(febboxUrl, regionPreference, userCookie);
+                
+                if (directSources && directSources.length > 0) {
+                    for (const source of directSources) {
+                        const streamTitle = `${baseStreamTitle} - ${source.label}`;
+                        let key5FromDirectSource = null;
+                        try {
+                            const urlParams = new URLSearchParams(new URL(source.url).search);
+                            if (urlParams.has('KEY5')) {
+                                key5FromDirectSource = urlParams.get('KEY5');
+                            }
+                        } catch(e) { /* ignore if URL parsing fails */ }
+                        streamsFromThisShareInfo.push({
+                            title: streamTitle, 
+                            url: source.url,
+                            quality: parseQualityFromLabel(source.label),
+                            codecs: extractCodecDetails(key5FromDirectSource || streamTitle) 
+                        });
                     }
-                    
-                    // Process FIDs
-                    if (fids.length > 0 && shareKey) {
-                        // Pass regionPreference and userCookie to fetchSourcesForSingleFid
-                        const fidPromises = fids.map(fid => fetchSourcesForSingleFid(fid, shareKey, regionPreference, userCookie));
-                        const fidSourcesArray = await Promise.all(fidPromises);
+                    // If direct sources are found, original code used 'continue', 
+                    // effectively skipping FID processing for this shareInfo. 
+                    // This behavior is maintained as FID processing is in the 'else if' block.
+                } else if (fids.length > 0 && shareKey) { // Only process FIDs if no directSources were found
+                    const fidPromises = fids.map(fid => fetchSourcesForSingleFid(fid, shareKey, regionPreference, userCookie));
+                    const fidSourcesArray = await Promise.all(fidPromises);
 
-                        for (const sources of fidSourcesArray) {
-                            if (!sources || !Array.isArray(sources)) {
-                                console.log(`  Warning: Invalid sources data received: ${typeof sources}`);
+                    for (const sources of fidSourcesArray) {
+                        if (!sources || !Array.isArray(sources)) {
+                            console.log(`  Warning: Invalid sources data received: ${typeof sources}`);
+                            continue;
+                        }
+                        
+                        for (const source of sources) {
+                            if (!source || !source.url || !source.label) {
+                                console.log(`  Warning: Invalid source object: ${JSON.stringify(source)}`);
                                 continue;
                             }
                             
-                            for (const source of sources) {
-                                if (!source || !source.url || !source.label) {
-                                    console.log(`  Warning: Invalid source object: ${JSON.stringify(source)}`);
-                                    continue;
-                                }
-                                
-                                const streamTitle = `${baseStreamTitle} - ${source.label}`;
-                                allStreams.push({
-                                    title: streamTitle, 
-                                    url: source.url,
-                                    quality: parseQualityFromLabel(source.label),
-                                    codecs: extractCodecDetails(source.detailedFilename || streamTitle) 
-                                });
-                            }
+                            const streamTitle = `${baseStreamTitle} - ${source.label}`;
+                            streamsFromThisShareInfo.push({
+                                title: streamTitle, 
+                                url: source.url,
+                                quality: parseQualityFromLabel(source.label),
+                                codecs: extractCodecDetails(source.detailedFilename || streamTitle) 
+                            });
                         }
-                    } else if (!directSources || directSources.length === 0) {
-                        console.log(`No FIDs or share key found, and no direct sources for ${febboxUrl}`);
                     }
-                } catch (error) {
-                    console.error(`Error processing FebBox URL ${febboxUrl}: ${error.message}`);
+                } else if (!directSources || directSources.length === 0) {
+                    console.log(`No FIDs or share key found, and no direct sources for ${febboxUrl}`);
                 }
             }
         } catch (error) {
-            console.error(`Error processing share info: ${error.message}`);
+            console.error(`Error processing share info for ${shareInfo.febbox_share_url}: ${error.message}`);
         }
-    }
+        return streamsFromThisShareInfo;
+    });
+
+    const nestedStreams = await Promise.all(streamPromises);
+    const allStreams = nestedStreams.flat();
+    // END MODIFICATION
     
     // Fetch sizes for all streams concurrently
     if (allStreams.length > 0) {
@@ -1846,11 +2227,12 @@ const getStreamsFromTmdbId = async (tmdbType, tmdbId, seasonNum = null, episodeN
 // Function to handle TV shows with seasons and episodes
 // MODIFICATION: Accept scraperApiKey -> MODIFICATION: Remove scraperApiKey
 // New parameter: resolveFids, defaults to true. If false, skips fetching sources for FIDs.
-const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum, episodeNum, allStreams, resolveFids = true, regionPreference = null, userCookie = null) => {
+const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum, episodeNum, resolveFids = true, regionPreference = null, userCookie = null) => {
     const processTimerLabel = `processShowWithSeasonsEpisodes_total_s${seasonNum}` + (episodeNum ? `_e${episodeNum}` : '_all') + (resolveFids ? '_resolve' : '_noresolve');
     console.time(processTimerLabel);
     console.log(`Processing TV Show: ${showboxTitle}, Season: ${seasonNum}, Episode: ${episodeNum !== null ? episodeNum : 'all'}${resolveFids ? '' : ' (FIDs not resolved)'}`);
     
+    const streamsForThisCall = []; // Initialize local array to store streams for this call
     let selectedEpisode = null; // Ensure selectedEpisode is declared here
 
     // Cache for the main FebBox page
@@ -1899,7 +2281,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
     
     // Parse the HTML to find folders (seasons)
     const $ = cheerio.load(contentHtml);
-    const shareKey = contentHtml.match(/(?:var share_key\s*=|share_key:\s*|shareid=)"?([a-zA-Z0-9]+)"?/)?.[1];
+    const shareKey = contentHtml.match(/(?:var share_key\s*=|share_key:\s*|shareid=)"?([a-zA-Z0-9-]+)"?/)?.[1];
     
     if (!shareKey) {
         console.log(`Could not extract share_key from ${febboxUrl}`);
@@ -1919,7 +2301,39 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
         
         const folderNameEl = feEl.find('p.file_name');
         const folderName = folderNameEl.length ? folderNameEl.text().trim() : feEl.attr('data-path') || `Folder_${dataId}`;
-        folders.push({ id: dataId, name: folderName });
+        
+        // Extract season number from folder name for more accurate matching
+        let extractedSeasonNum = null;
+        const folderNameLower = folderName.toLowerCase();
+        
+        // Try more specific season number extraction patterns
+        const seasonPatterns = [
+            /season\s+(\d+)/i,                // Season 1
+            /s(\d+)/i,                        // S1
+            /season(\d+)/i                     // Season1
+        ];
+        
+        for (const pattern of seasonPatterns) {
+            const match = folderNameLower.match(pattern);
+            if (match && match[1]) {
+                extractedSeasonNum = parseInt(match[1], 10);
+                break;
+            }
+        }
+        
+        // If no specific pattern matched, look for any standalone numbers
+        if (extractedSeasonNum === null) {
+            const numMatches = folderNameLower.match(/\b(\d+)\b/g);
+            if (numMatches && numMatches.length === 1) { // Only if exactly one number is found
+                extractedSeasonNum = parseInt(numMatches[0], 10);
+            }
+        }
+        
+        folders.push({ 
+            id: dataId, 
+            name: folderName,
+            extractedSeasonNum: extractedSeasonNum
+        });
     });
     
     if (folders.length === 0) {
@@ -1932,7 +2346,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
         if (directSources && directSources.length > 0) {
             for (const source of directSources) {
                 const streamTitle = `${showboxTitle} - ${source.label}`;
-                allStreams.push({
+                streamsForThisCall.push({ // MODIFIED: Push to streamsForThisCall
                     title: streamTitle, 
                     url: source.url,
                     quality: parseQualityFromLabel(source.label),
@@ -1940,7 +2354,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
                 });
             }
             console.timeEnd(processTimerLabel);
-            return;
+            return streamsForThisCall;
         }
         
         if (fids.length > 0) {
@@ -1952,7 +2366,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
             for (const sources of fallbackFidSourcesArray) {
                 for (const source of sources) {
                     const streamTitle = `${showboxTitle} - ${source.label}`;
-                    allStreams.push({
+                    streamsForThisCall.push({ // MODIFIED: Push to streamsForThisCall
                         title: streamTitle, 
                         url: source.url,
                         quality: parseQualityFromLabel(source.label),
@@ -1962,38 +2376,96 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
             }
         }
         console.timeEnd(processTimerLabel);
-        return;
+        return streamsForThisCall;
     }
+    
+    console.log(`Found ${folders.length} season folders:`, folders.map(f => 
+        `"${f.name}" (ID: ${f.id}, Extracted Season: ${f.extractedSeasonNum !== null ? f.extractedSeasonNum : 'None'})`
+    ).join(', '));
     
     // Find matching season folder
     let selectedFolder = null;
+    
+    // First, look for exact season number match using extracted season numbers
     for (const folder of folders) {
-        const folderNameLower = folder.name.toLowerCase();
-        if (
-            folderNameLower.includes(`season ${seasonNum}`) || 
-            folderNameLower.includes(`s${seasonNum}`) ||
-            folderNameLower.includes(`season${seasonNum}`) ||
-            folderNameLower === `s${seasonNum}` ||
-            folderNameLower === `season ${seasonNum}` ||
-            (folderNameLower.match(/\d+/g) || []).includes(String(seasonNum))
-        ) {
+        if (folder.extractedSeasonNum === seasonNum) {
             selectedFolder = folder;
+            console.log(`Found exact season match: "${folder.name}" with extracted season number ${folder.extractedSeasonNum}`);
             break;
         }
     }
     
-    // If no exact match, try index-based approach (season 1 = first folder)
+    // If no exact match by extracted number, try the text pattern matches (legacy approach)
+    if (!selectedFolder) {
+        for (const folder of folders) {
+            const folderNameLower = folder.name.toLowerCase();
+            
+            // More precise matching patterns to avoid partial matches
+            if (
+                folderNameLower === `season ${seasonNum}` || 
+                folderNameLower === `s${seasonNum}` ||
+                folderNameLower === `season${seasonNum}` ||
+                // Match with word boundaries to avoid Season 1 matching Season 10
+                folderNameLower.match(new RegExp(`\\bseason\\s+${seasonNum}\\b`)) ||
+                folderNameLower.match(new RegExp(`\\bs${seasonNum}\\b`))
+            ) {
+                selectedFolder = folder;
+                console.log(`Found season match via text pattern: "${folder.name}"`);
+                break;
+            }
+        }
+    }
+    
+    // If still no match, sort folders by extracted season number and try index-based approach
     if (!selectedFolder && seasonNum > 0 && seasonNum <= folders.length) {
-        selectedFolder = folders[seasonNum - 1];
+        // First try to sort by extracted season number (if available)
+        const sortedFolders = [...folders].sort((a, b) => {
+            // If both have extracted season numbers, compare them
+            if (a.extractedSeasonNum !== null && b.extractedSeasonNum !== null) {
+                return a.extractedSeasonNum - b.extractedSeasonNum;
+            }
+            // If only one has extracted season number, put it first
+            if (a.extractedSeasonNum !== null) return -1;
+            if (b.extractedSeasonNum !== null) return 1;
+            // Otherwise, keep original order
+            return 0;
+        });
+        
+        // Log the sorted folders for debugging
+        console.log(`Sorted folders by season number:`, sortedFolders.map(f => 
+            `"${f.name}" (ID: ${f.id}, Extracted Season: ${f.extractedSeasonNum !== null ? f.extractedSeasonNum : 'None'})`
+        ).join(', '));
+        
+        // Check if any folder has an extracted season number matching the requested season
+        const exactExtractedMatch = sortedFolders.find(f => f.extractedSeasonNum === seasonNum);
+        if (exactExtractedMatch) {
+            selectedFolder = exactExtractedMatch;
+            console.log(`Found exact season match in sorted folders: "${selectedFolder.name}" with season ${selectedFolder.extractedSeasonNum}`);
+        } 
+        // Otherwise, if we have folders with extracted season numbers, use them for mapping
+        else if (sortedFolders.some(f => f.extractedSeasonNum !== null)) {
+            // If we have some season numbers, try to find the appropriate folder
+            // This approach is better than using index because folders might be out of order
+            const validFolders = sortedFolders.filter(f => f.extractedSeasonNum !== null);
+            if (seasonNum <= validFolders.length) {
+                selectedFolder = validFolders[seasonNum - 1];
+                console.log(`Using sorted folder by extracted number index: "${selectedFolder.name}" at position ${seasonNum}`);
+            }
+        } 
+        // Last resort: use index-based approach on original folder order
+        else {
+            selectedFolder = folders[seasonNum - 1];
+            console.log(`Using original folder order index: "${selectedFolder.name}" at position ${seasonNum}`);
+        }
     }
     
     if (!selectedFolder) {
         console.log(`Could not find season ${seasonNum} folder in ${febboxUrl}`);
         console.timeEnd(processTimerLabel);
-        return;
+        return streamsForThisCall;
     }
     
-    console.log(`Found season folder: ${selectedFolder.name} (ID: ${selectedFolder.id})`);
+    console.log(`Selected season folder: ${selectedFolder.name} (ID: ${selectedFolder.id})`);
     
     // Cache for season folder content
     const cacheSubDirFolderHtml = 'febbox_season_folders'; 
@@ -2069,7 +2541,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
                 }
                 // console.timeEnd(fetchFolderTimer); // fetchFolderTimer might not be defined if cache hit for HTML but miss for parsed
                 console.timeEnd(processTimerLabel); // End outer timer
-                return; // Exit if fetching folder content fails
+                return streamsForThisCall; // Return empty streams array if fetching folder content fails
             }
         }
     }
@@ -2080,7 +2552,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
         if (!folderHtml) { // If still no folderHtml (e.g. HTML cache miss and fetch fail), then error out
             console.log(`No folder HTML content available (and no cached parsed list) for folder ${selectedFolder.id}`);
             console.timeEnd(processTimerLabel);
-            return;
+            return streamsForThisCall;
         }
 
         // Parse the folderHtml since we didn't have a cached parsed list
@@ -2134,7 +2606,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
         if (!selectedEpisode) {
             console.log(`Could not find episode ${episodeNum} in season folder ${selectedFolder.name}`);
             console.timeEnd(processTimerLabel);
-            return;
+            return streamsForThisCall;
         }
         
         console.log(`Found episode: ${selectedEpisode.name} (FID: ${selectedEpisode.fid})`);
@@ -2170,7 +2642,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
                 const episodeName = episodeDetail ? episodeDetail.name : '';
                 
                 const streamTitle = `${showboxTitle} - S${seasonNum}${episodeNum && selectedEpisode && fid === selectedEpisode.fid ? `E${episodeNum}` : (episodeDetail ? `E${episodeDetail.episodeNum}`: '')} - ${episodeName} - ${source.label}`;
-                allStreams.push({
+                streamsForThisCall.push({ // MODIFIED: Push to streamsForThisCall
                     title: streamTitle, 
                     url: source.url,
                     quality: parseQualityFromLabel(source.label),
@@ -2185,6 +2657,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
         console.log(`  Skipping FID resolution for ${episodeFids.length} episodes in S${seasonNum} as per request.`);
     }
     console.timeEnd(processTimerLabel);
+    return streamsForThisCall; // MODIFIED: Return the collected streams
 };
 
 // Helper function to get episode number from filename

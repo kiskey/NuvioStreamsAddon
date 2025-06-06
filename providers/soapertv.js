@@ -3,20 +3,58 @@ const cheerio = require('cheerio'); // As per original script: npm install cheer
 const { URLSearchParams } = require('url'); // For form data
 
 // Constants
-const PROXY_URL = 'https://starlit-valkyrie-39f5ab.netlify.app/?destination=';
+const PROXY_URL = process.env.SOAPERTV_PROXY_URL || process.env.SHOWBOX_PROXY_URL_VALUE;
 const BASE_URL = 'https://soaper.cc';
 const TMDB_API_KEY_SOAPERTV = "439c478a771f35c05022f9feabcca01c"; // Public TMDB API key used by this provider
+
+// Simple In-Memory Cache
+const soaperCache = {
+  search: {},
+  episodes: {}
+};
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes TTL for cache entries
+
+// Function to get from cache
+function getFromCache(type, key) {
+  if (soaperCache[type] && soaperCache[type][key]) {
+    const entry = soaperCache[type][key];
+    if (Date.now() - entry.timestamp < CACHE_TTL) {
+      console.log(`[Soaper TV Cache] HIT for ${type} - ${key}`);
+      return entry.data;
+    }
+    console.log(`[Soaper TV Cache] STALE for ${type} - ${key}`);
+    delete soaperCache[type][key]; // Remove stale entry
+  }
+  console.log(`[Soaper TV Cache] MISS for ${type} - ${key}`);
+  return null;
+}
+
+// Function to save to cache
+function saveToCache(type, key, data) {
+  if (!soaperCache[type]) soaperCache[type] = {};
+  soaperCache[type][key] = {
+    data: data,
+    timestamp: Date.now()
+  };
+  console.log(`[Soaper TV Cache] SAVED for ${type} - ${key}`);
+}
 
 // Proxy wrapper for fetch
 async function proxiedFetchSoaper(url, options = {}, isFullUrlOverride = false) {
   const isHttpUrl = url.startsWith('http://') || url.startsWith('https://');
   const fullUrl = isHttpUrl || isFullUrlOverride ? url : `${BASE_URL}${url}`;
-  const proxiedUrl = `${PROXY_URL}${encodeURIComponent(fullUrl)}`;
   
-  console.log(`[Soaper TV] Fetching: ${url} (via proxy: ${proxiedUrl.substring(0,100)}...)`);
+  let fetchUrl;
+  if (PROXY_URL) {
+    fetchUrl = `${PROXY_URL}${encodeURIComponent(fullUrl)}`;
+    console.log(`[Soaper TV] Fetching: ${url} (via proxy: ${fetchUrl.substring(0,100)}...)`);
+  } else {
+    fetchUrl = fullUrl;
+    console.log(`[Soaper TV] Fetching: ${url} (direct request)`);
+  }
   
   try {
-    const response = await fetch(proxiedUrl, options);
+    const response = await fetch(fetchUrl, options);
     
     if (!response.ok) {
       let errorBody = '';
@@ -86,24 +124,32 @@ async function getSoaperTvStreams(tmdbId, mediaType = 'movie', season = '', epis
     }
     console.log(`[Soaper TV] TMDB Info: "${mediaInfo.title}" (${mediaInfo.year || 'N/A'})`);
     
-    const searchUrl = `/search.html?keyword=${encodeURIComponent(mediaInfo.title)}`;
-    const searchResultHtml = await proxiedFetchSoaper(searchUrl);
-    const search$ = cheerio.load(searchResultHtml);
-    
-    const searchResults = [];
-    search$('.thumbnail').each((_, element) => {
-      const title = search$(element).find('h5 a').first().text().trim();
-      const yearText = search$(element).find('.img-tip').first().text().trim();
-      const url = search$(element).find('h5 a').first().attr('href');
-      
-      if (title && url) {
-        searchResults.push({ 
-          title, 
-          year: yearText ? parseInt(yearText, 10) : undefined, 
-          url 
+    const searchCacheKey = mediaInfo.title.toLowerCase();
+    let searchResults = getFromCache('search', searchCacheKey);
+
+    if (!searchResults) {
+        const searchUrl = `/search.html?keyword=${encodeURIComponent(mediaInfo.title)}`;
+        const searchResultHtml = await proxiedFetchSoaper(searchUrl);
+        const search$ = cheerio.load(searchResultHtml);
+        
+        searchResults = []; // Initialize to empty array before pushing
+        search$('.thumbnail').each((_, element) => {
+            const title = search$(element).find('h5 a').first().text().trim();
+            const yearText = search$(element).find('.img-tip').first().text().trim();
+            const url = search$(element).find('h5 a').first().attr('href');
+            
+            if (title && url) {
+                searchResults.push({ 
+                    title, 
+                    year: yearText ? parseInt(yearText, 10) : undefined, 
+                    url 
+                });
+            }
         });
-      }
-    });
+        saveToCache('search', searchCacheKey, searchResults);
+    } else {
+        console.log(`[Soaper TV] Using cached search results for "${mediaInfo.title}".`);
+    }
     
     console.log(`[Soaper TV] Found ${searchResults.length} search results for "${mediaInfo.title}".`);
     
@@ -119,29 +165,48 @@ async function getSoaperTvStreams(tmdbId, mediaType = 'movie', season = '', epis
     
     if (mediaType === 'tv') {
       console.log(`[Soaper TV] Finding Season ${season}, Episode ${episode} for TV show.`);
-      const showPageHtml = await proxiedFetchSoaper(contentUrl);
-      const showPage$ = cheerio.load(showPageHtml);
       
-      const seasonBlock = showPage$('h4')
-        .filter((_, el) => showPage$(el).text().trim().split(':')[0].trim().toLowerCase() === `season${season}`)
-        .parent();
+      const episodeCacheKey = `${contentUrl}-s${season}`.toLowerCase();
+      let episodeLinks = getFromCache('episodes', episodeCacheKey);
+
+      if (!episodeLinks) {
+        const showPageHtml = await proxiedFetchSoaper(contentUrl);
+        const showPage$ = cheerio.load(showPageHtml);
+        
+        const seasonBlock = showPage$('h4')
+          .filter((_, el) => showPage$(el).text().trim().split(':')[0].trim().toLowerCase() === `season${season}`)
+          .parent();
+        
+        if (seasonBlock.length === 0) {
+          console.log(`[Soaper TV] Season ${season} not found on page.`);
+          return [];
+        }
+        
+        episodeLinks = []; // Initialize before pushing
+        seasonBlock.find('a').each((_, el) => {
+            const episodeNumText = showPage$(el).text().split('.')[0];
+            const episodeUrl = showPage$(el).attr('href');
+            if (episodeNumText && episodeUrl) {
+                episodeLinks.push({
+                    num: parseInt(episodeNumText, 10),
+                    url: episodeUrl
+                });
+            }
+        });
+        saveToCache('episodes', episodeCacheKey, episodeLinks);
+      } else {
+        console.log(`[Soaper TV] Using cached episode links for Season ${season} of ${contentUrl}.`);
+      }
+
+      const targetEpisode = episodeLinks.find(ep => ep.num === parseInt(episode, 10));
       
-      if (seasonBlock.length === 0) {
-        console.log(`[Soaper TV] Season ${season} not found on page.`);
+      if (!targetEpisode) {
+        console.log(`[Soaper TV] Episode ${episode} not found in Season ${season} (using ${episodeLinks.length} cached/parsed links).`);
         return [];
       }
       
-      const episodeElement = seasonBlock.find('a').toArray().find(el => 
-        parseInt(showPage$(el).text().split('.')[0], 10) === parseInt(episode, 10)
-      );
-      
-      if (!episodeElement) {
-        console.log(`[Soaper TV] Episode ${episode} not found in Season ${season}.`);
-        return [];
-      }
-      
-      contentUrl = showPage$(episodeElement).attr('href');
-      console.log(`[Soaper TV] Found episode page: ${contentUrl}`);
+      contentUrl = targetEpisode.url;
+      console.log(`[Soaper TV] Found episode page (from cache/parse): ${contentUrl}`);
     }
     
     const contentPageHtml = await proxiedFetchSoaper(contentUrl);
@@ -220,4 +285,4 @@ async function getSoaperTvStreams(tmdbId, mediaType = 'movie', season = '', epis
   }
 }
 
-module.exports = { getSoaperTvStreams }; 
+module.exports = { getSoaperTvStreams };

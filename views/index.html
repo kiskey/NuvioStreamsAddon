@@ -743,6 +743,7 @@
                 margin: 0;
                 border-left: none;
                 border-right: none;
+                overflow: visible; /* Allow card to expand with content */
             }
             
             .card:before {
@@ -1427,9 +1428,153 @@
             background: linear-gradient(135deg, #2196F3, #03A9F4); /* Blue gradient for VidSrc */
         }
 
+        .vidzee-icon {
+            background: linear-gradient(135deg, #4CAF50, #8BC34A); /* Green gradient for VidZee */
+        }
+
+        /* Migration Tool Styles */
+        .migration-tool-container {
+            background-color: rgba(255, 100, 50, 0.1);
+            border: 1px solid rgba(255, 100, 50, 0.3);
+            border-radius: 0.6rem;
+            padding: 1.25rem;
+            margin-bottom: 1.5rem;
+            grid-column: 1 / -1; /* Span full width in grid */
+        }
+
+        .migration-tool-container h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #ff6432; /* Orange-red for urgency */
+            margin-bottom: 0.75rem;
+            text-align: center;
+        }
+
+        .migration-tool-container p {
+            font-size: 0.85rem;
+            color: var(--text-light);
+            margin-bottom: 1rem;
+            line-height: 1.5;
+            text-align: center;
+        }
+
+        .migration-input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .migration-input {
+            padding: 0.65rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+            background-color: rgba(20, 20, 20, 0.9);
+            color: var(--text);
+            font-size: 0.9rem;
+            outline: none;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        
+        .migration-input:focus {
+            border-color: #ff6432;
+            box-shadow: 0 0 0 2px rgba(255, 100, 50, 0.2);
+        }
+
+        .migration-output-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .migration-output {
+            flex-grow: 1;
+            padding: 0.65rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--secondary) !important; /* Green border for success */
+            background-color: rgba(0, 193, 110, 0.05) !important;
+            color: var(--text) !important;
+            font-size: 0.9rem;
+            word-break: break-all;
+            box-shadow: 0 0 0 2px rgba(0, 193, 110, 0.1);
+        }
+
+        /* New Instance Banner Styles */
+        .instance-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(135deg, #ff3a3a, #ff6432);
+            color: white;
+            text-align: center;
+            padding: 12px 20px;
+            font-weight: 500;
+            z-index: 1000;
+            display: none; /* Hidden by default */
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        
+        .instance-banner a {
+            color: white;
+            text-decoration: underline;
+            font-weight: 600;
+        }
+        
+        .instance-banner-close {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        
+        .instance-banner-close:hover {
+            opacity: 1;
+        }
+        
+        /* Adjust body padding when banner is visible */
+        body.has-instance-banner {
+            padding-top: 50px;
+        }
+        
+        /* Adjust for mobile */
+        @media (max-width: 600px) {
+            .instance-banner {
+                padding: 10px 30px 10px 10px; /* Make room for close button */
+                font-size: 14px;
+            }
+            body.has-instance-banner {
+                padding-top: 40px;
+            }
+        }
+
     </style>
 </head>
 <body>
+    <!-- New Koyeb Down Banner -->
+    <div id="koyebDownBanner" class="instance-banner" style="display: block; background: linear-gradient(135deg, #ff3a3a, #ff6432);">
+        ⚠️ The Koyeb instance is currently down due to high usage! This Vercel instance is available as a temporary solution.
+        <button id="closeKoyebDownBanner" class="instance-banner-close">×</button>
+    </div>
+
+    <!-- Remove the Vercel-to-Koyeb Banner -->
+    <div id="instanceBanner" class="instance-banner" style="display: none;">
+        ⚠️ This Vercel instance will shut down soon! Please use our new Koyeb instance: 
+        <a href="https://aesthetic-jodie-tapframe-ab46446c.koyeb.app/" target="_blank">
+            Click here to access the Koyeb instance
+        </a>
+        <button id="closeBanner" class="instance-banner-close">×</button>
+    </div>
+    
     <div class="cards-container" id="cardsContainer">
         <div class="card main-card">
             <div class="card-header">
@@ -1437,6 +1582,8 @@
                 <h1>Nuvio Streams Addon</h1>
             </div>
             <div class="card-body">
+                <!-- REMOVE URGENT MIGRATION TOOL SECTION -->
+                
                 <p class="full-width">Your gateway to high-quality streaming on Stremio. Enjoy movies and TV shows from multiple sources with our powerful addon.</p>
                 
                 <button class="more-addons-btn full-width" id="moreAddonsBtn">
@@ -1452,9 +1599,19 @@
                         <span class="provider-detail">May contain 4K/DV/HDR</span>
                     </div>
                     <div class="provider-item">
+                        <div class="provider-icon hianime-icon">🍥</div>
+                        <div class="provider-name">Hianime</div>
+                        <span class="provider-detail">Anime (Dub/Sub)</span>
+                    </div>
+                    <div class="provider-item">
                         <div class="provider-icon xprime-icon">⚡</div>
                         <div class="provider-name">Xprime.tv</div>
-                        <span class="provider-detail">Typically Faster</span>
+                        <span class="provider-detail" style="color: #ff8c00;">Public (w/ API Key) / Self-host</span>
+                    </div>
+                    <div class="provider-item">
+                        <div class="provider-icon hollymovie-icon">🎬</div>
+                        <div class="provider-name">HollyMovieHD</div>
+                        <span class="provider-detail">Multiple Qualities</span>
                     </div>
                     <div class="provider-item">
                         <div class="provider-icon soapertv-icon">🧼</div> 
@@ -1462,36 +1619,46 @@
                         <span class="provider-detail">Auto Quality</span>
                     </div>
                     <div class="provider-item">
-                        <div class="provider-icon hollymovie-icon">🎬</div>
-                        <div class="provider-name">HollyMovieHD</div>
+                        <div class="provider-icon vidzee-icon">📺</div>
+                        <div class="provider-name">VidZee</div>
                         <span class="provider-detail">Auto Quality</span>
                     </div>
                     <div class="provider-item">
-                        <div class="provider-icon hianime-icon">🍥</div>
-                        <div class="provider-name">Hianime</div>
-                        <span class="provider-detail">Anime (Dub/Sub)</span>
+                        <div class="provider-icon cuevana-icon">🇨</div> <!-- Placeholder icon, can be updated -->
+                        <div class="provider-name">Cuevana</div>
+                        <span class="provider-detail" style="color: #ff8c00;">LATAM Provider (Self-hosted only)</span>
                     </div>
                     <div class="provider-item">
                         <div class="provider-icon vidsrc-icon">🎬</div>
                         <div class="provider-name">VidSrc</div>
-                        <span class="provider-detail">Multi-Source</span>
+                        <span class="provider-detail">Auto Quality</span>
                     </div>
                 </div>
                 
+                <!-- Provider info note remains in place -->
                 <div class="provider-info-note">
                     <span class="info-icon">💡</span> 
                     <span>The flag emoji (e.g., 🇺🇸, 🇬🇧) next to ShowBox stream names indicates the server location, not the content's language.</span>
                 </div>
 
-                <!-- NEW: Provider Selection Section -->
+                <!-- Disclaimer moved from below to here -->
+                <div class="disclaimer">
+                    <div class="disclaimer-header">
+                        <span class="disclaimer-icon">ℹ️</span>
+                        <span>Disclaimer</span>
+                    </div>
+                    <div class="disclaimer-content">
+                    <p>Nuvio Streams is a scraper-based addon that aggregates content from various providers. I do not own or host any of the content provided.</p>
+                        <p>Providers (including ShowBox) may become unavailable without notice. As an independent developer, I'll make every effort to maintain functionality, but sources may stop working unexpectedly.</p>
+                    </div>
+                </div>
+                
+                <!-- Provider Selection Section -->
                 <div class="provider-selection-container full-width" style="margin-top: 1.5rem;">
                     <h2 style="font-size: 1rem; font-weight: 500; margin-bottom: 0.75rem; color: var(--text); opacity: 0.9;">Customize Your Providers</h2>
                     <p style="font-size: 0.85rem; line-height: 1.5; margin-bottom: 1rem; color: var(--text-light);">
                         Select the providers you want to use. Unchecking providers can speed up results if you only use specific sources. If all are checked (default), the addon fetches from all.
                     </p>
-                    <div style="background-color: rgba(255, 100, 50, 0.1); border: 1px solid rgba(255, 100, 50, 0.3); color: var(--text-light); padding: 0.75rem; border-radius: 0.4rem; margin-bottom: 1rem; font-size: 0.8rem; line-height: 1.4;">
-                        ⚠️ <strong>HollyMovieHD Status:</strong> Currently experiencing issues and is disabled by default to improve overall addon speed. While you can still select it, links may not be available until service is restored.
-                    </div>
                     <div class="provider-checkbox-list" style="background-color: rgba(15, 15, 15, 0.7); border-radius: 0.6rem; padding: 1rem; border: 1px solid var(--border);">
                         <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
@@ -1519,10 +1686,22 @@
                         </div>
                         <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
+                                <input type="checkbox" id="providerCuevana" name="providerSelect" value="cuevana" disabled style="margin-right: 0.5rem; accent-color: var(--primary); opacity: 0.5;">
+                                <label for="providerCuevana" style="font-size: 0.9rem; opacity: 0.5;">Cuevana</label>
+                            </div>
+                            <select id="qualityCuevana" name="providerQuality" data-provider="cuevana" class="provider-sort-select" disabled>
+                                <option value="all" selected>All Qualities</option>
+                                <option value="480p">480p & Up</option>
+                                <option value="720p">720p & Up</option>
+                                <option value="1080p">1080p & Up</option>
+                            </select>
+                        </div>
+                        <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
+                            <div style="display: flex; align-items: center;">
                                 <input type="checkbox" id="providerHollymoviehd" name="providerSelect" value="hollymoviehd" checked style="margin-right: 0.5rem; accent-color: var(--primary);">
                                 <label for="providerHollymoviehd" style="font-size: 0.9rem;">HollyMovieHD</label>
                             </div>
-                            <select id="qualityHollymoviehd" name="providerQuality" data-provider="hollymoviehd" class="provider-sort-select" disabled>
+                            <select id="qualityHollymoviehd" name="providerQuality" data-provider="hollymoviehd" class="provider-sort-select">
                                 <option value="all" selected>All Qualities</option>
                                 <option value="480p">480p & Up</option>
                                 <option value="720p">720p & Up</option>
@@ -1535,6 +1714,18 @@
                                 <label for="providerSoapertv" style="font-size: 0.9rem;">Soaper TV</label>
                             </div>
                             <select id="qualitySoapertv" name="providerQuality" data-provider="soapertv" class="provider-sort-select" disabled>
+                                <option value="all" selected>All Qualities</option>
+                                <option value="480p">480p & Up</option>
+                                <option value="720p">720p & Up</option>
+                                <option value="1080p">1080p & Up</option>
+                            </select>
+                        </div>
+                        <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
+                            <div style="display: flex; align-items: center;">
+                                <input type="checkbox" id="providerVidzee" name="providerSelect" value="vidzee" checked style="margin-right: 0.5rem; accent-color: var(--primary);">
+                                <label for="providerVidzee" style="font-size: 0.9rem;">VidZee</label>
+                            </div>
+                             <select id="qualityVidzee" name="providerQuality" data-provider="vidzee" class="provider-sort-select">
                                 <option value="all" selected>All Qualities</option>
                                 <option value="480p">480p & Up</option>
                                 <option value="720p">720p & Up</option>
@@ -1574,17 +1765,20 @@
                 </div>
                 <!-- END NEW: Provider Selection Section -->
 
-                <div class="disclaimer">
-                    <div class="disclaimer-header">
-                        <span class="disclaimer-icon">ℹ️</span>
-                        <span>Disclaimer</span>
-                    </div>
-                    <div class="disclaimer-content">
-                    <p>Nuvio Streams is a scraper-based addon that aggregates content from various providers. I do not own or host any of the content provided.</p>
-                        <p>Providers (including ShowBox) may become unavailable without notice. As an independent developer, I'll make every effort to maintain functionality, but sources may stop working unexpectedly.</p>
+                <!-- ScraperAPI Key Input - MOVED OUTSIDE of cookie-config -->
+                <div class="scraper-api-key-container full-width" style="margin-top: 1.5rem;">
+                    <div style="background-color: rgba(15, 15, 15, 0.7); border-radius: 0.6rem; padding: 1rem; border: 1px solid var(--border);">
+                        <label for="scraperApiKeyInput" style="display: block; font-size: 0.9rem; font-weight: 500; margin-bottom: 0.25rem;">ScraperAPI Key (Optional for Xprime):</label>
+                        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                            <input type="text" id="scraperApiKeyInput" placeholder="Enter your ScraperAPI key" class="cookie-input" style="flex-grow: 1; min-width: 150px;">
+                            <button id="applyScraperApiKeyBtn" class="how-to-get-btn" style="flex-shrink: 0;">Apply Key</button>
+                            <button id="howToGetScraperApiKeyBtn" class="how-to-get-btn" style="flex-shrink: 0;">How to Get</button>
+                        </div>
+                        <p style="font-size: 0.75rem; color: var(--text-light); margin-top: 0.25rem;">Xprime requires a ScraperAPI key on this public instance. Alternatively, self-host the addon for direct Xprime access. Leave blank if not using Xprime or if self-hosting.</p>
                     </div>
                 </div>
-                
+                <!-- End ScraperAPI Key Input -->
+
                 <!-- Add Cookie Configuration Section -->
                 <div class="cookie-config-container full-width">
                     <div class="cookie-header">
@@ -1628,18 +1822,29 @@
                         <p class="server-selection-note" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-light);">
                             <strong>Server Selection:</strong> Choose the server region closest to your physical location for best performance. Different regions may have different content availability and speed. If a region doesn't work well, try another one. <span style="color: #00c16e;">The system will automatically fall back to a US server if your selected region is unavailable.</span>
                         </p>
+
+                        <!-- ScraperAPI Key Input was here, MOVED OUT -->
                         
-                        <div id="personalizedManifest" class="personalized-manifest">
-                            <div class="manifest-result" style="display:none;">
-                                <h4>Your Personalized Addon</h4>
-                                <p class="manifest-note">This URL is unique to you and includes your cookie and server region. Keep it private.</p>
-                                <div class="manifest-url-box">
-                                    <span id="personalManifestUrl"></span>
-                                </div>
-                            </div>
+                    </div> <!-- This is the closing div for id="cookieConfigSection" -->
+                </div> <!-- This is the closing div for class="cookie-config-container full-width" -->
+                <!-- End Cookie Configuration Section -->
+
+                <!-- Personalized Manifest Section - MOVED OUTSIDE of cookie-config -->
+                <div id="personalizedManifest" class="personalized-manifest full-width" style="margin-top: 1.5rem;">
+                    <div class="manifest-result" style="display:none;">
+                        <h4>Your Personalized Addon</h4>
+                        <p class="manifest-note">This URL is unique to you and includes your cookie and server region. Keep it private.</p>
+                        <div class="manifest-url-box">
+                            <span id="personalManifestUrl"></span>
+                        </div>
+                        <div style="display: flex; margin-top: 0.75rem; gap: 0.5rem;">
+                            <a href="/configure" id="configureLink" class="copy-btn" style="flex: 1; display: flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; cursor: pointer;">
+                                <span style="margin-right: 0.25rem;">⚙️</span> Configure Settings
+                            </a>
                         </div>
                     </div>
                 </div>
+                <!-- End Personalized Manifest Section -->
                 
                 <div class="buttons">
                     <a href="#" id="installLink" class="btn btn-primary">Install Addon</a>
@@ -1726,6 +1931,45 @@
             <p>I'll do my best to maintain this addon, but can't guarantee all sources will always work. Using your own cookie is the best way to maximize reliability while sources are available.</p>
         </div>
     </div>
+
+    <!-- NEW: ScraperAPI Key Tutorial Panel -->
+    <div class="video-tutorial-panel" id="scraperApiTutorialPanel">
+        <div class="tutorial-header">
+            <h2 class="tutorial-title">How to Get a ScraperAPI Key</h2>
+            <button class="close-tutorial" id="closeScraperApiTutorial">×</button>
+        </div>
+        <div class="tutorial-steps">
+            <h3>Text Instructions:</h3>
+            <div class="step">
+                <div class="step-number">1</div>
+                <div class="step-text">Go to <a href="https://www.scraperapi.com/" target="_blank" style="color: var(--primary);">www.scraperapi.com</a>.</div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-text">Click on "Sign Up" (usually in the top right corner) and create an account, for example, by using your Google account.</div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-text">After signing up and logging in, find your API Key. It's typically displayed on your dashboard.</div>
+            </div>
+            <div class="step">
+                <div class="step-number">4</div>
+                <div class="step-text">ScraperAPI provides a free plan that usually includes 1,000 API credits per month, which reset automatically.</div>
+            </div>
+            <div class="step">
+                <div class="step-number">5</div>
+                <div class="step-text">Copy this API Key and paste it into the "ScraperAPI Key" input field on the Nuvio Streams configuration page.</div>
+            </div>
+        </div>
+        <div class="tutorial-warning">
+            <h3>Important Notice for Xprime:</h3>
+            <p>Using a ScraperAPI key is one way to access Xprime.tv streams on this public Nuvio Streams instance. This helps bypass potential blocking that Xprime might implement.</p>
+            <p>However, this is not a guaranteed long-term solution. Access through ScraperAPI can become unreliable if ScraperAPI itself is blocked by Xprime, if your free credits run out, or if ScraperAPI changes its service terms.</p>
+            <p><strong>For the most stable and reliable Xprime access, self-hosting this addon is strongly recommended.</strong> When self-hosting, you can configure your own proxy solutions or attempt direct access, bypassing the need for a third-party service like ScraperAPI for Xprime.</p>
+            <p style="margin-top: 10px; font-style: italic;"><strong>Disclaimer:</strong> This project is not associated with ScraperAPI in any way. The ScraperAPI service is utilized here solely as a technical means to facilitate the scraping of links, which is necessary for accessing content from certain providers on this public instance.</p>
+        </div>
+    </div>
+    <!-- END NEW: ScraperAPI Key Tutorial Panel -->
 
     <script>
         const cardsContainer = document.getElementById('cardsContainer');
@@ -1843,12 +2087,16 @@
         const providerCheckboxes = document.querySelectorAll('input[name="providerSelect"]');
         const selectAllProvidersBtn = document.getElementById('selectAllProvidersBtn');
         const deselectAllProvidersBtn = document.getElementById('deselectAllProvidersBtn');
-        const applyProvidersBtn = document.getElementById('applyProvidersBtn');
+        const applyProvidersBtn = document.getElementById('applyProvidersBtn'); // This button will now use the new function
         const totalProviders = providerCheckboxes.length;
-        const providerQualitySelects = document.querySelectorAll('select[name="providerQuality"]'); // Changed from providerSortSelects
-        
+        const providerQualitySelects = document.querySelectorAll('select[name="providerQuality"]');
+        const scraperApiKeyInput = document.getElementById('scraperApiKeyInput'); // Get the ScraperAPI input
+        const applyScraperApiKeyBtn = document.getElementById('applyScraperApiKeyBtn'); // NEW: Get the Apply Scraper API Key button
+
         // Get reference to ShowBox checkbox specifically
         const showboxCheckbox = document.getElementById('providerShowbox');
+        const xprimeCheckbox = document.getElementById('providerXprime'); // Get Xprime checkbox
+        const vidzeeCheckbox = document.getElementById('providerVidzee'); // NEW: Get VidZee checkbox
 
         // Function to update region selector enabled state based on cookie validity
         function updateRegionSelectorState() {
@@ -1906,8 +2154,25 @@
             }
         }
 
-        // --- NEW: Function to apply provider selection without cookie ---
-        function applyProviderSelectionOnly() {
+        // --- NEW: Function to enable/disable ScraperAPI key input based on Xprime selection ---
+        function updateScraperApiKeyInputState() {
+            if (scraperApiKeyInput && xprimeCheckbox) {
+                if (xprimeCheckbox.checked) {
+                    scraperApiKeyInput.disabled = false;
+                    scraperApiKeyInput.style.opacity = '1';
+                } else {
+                    scraperApiKeyInput.disabled = true;
+                    scraperApiKeyInput.style.opacity = '0.6';
+                }
+            }
+        }
+
+        // --- NEW: Centralized function to regenerate the personalized manifest URL ---
+        async function regeneratePersonalizedManifest() {
+            const cookieValue = cookieInput.value.trim();
+            const regionValue = regionSelector ? regionSelector.value : null;
+            const scraperApiKeyValue = scraperApiKeyInput.value.trim();
+
             const selectedProviders = [];
             providerCheckboxes.forEach(checkbox => {
                 if (checkbox.checked) {
@@ -1915,63 +2180,112 @@
                 }
             });
 
-            // Collect quality preferences
             const qualityPreferences = {};
             let hasQualityPreferences = false;
             providerCheckboxes.forEach(checkbox => {
                 if (checkbox.checked) {
                     const providerValue = checkbox.value;
-                    const qualityDropdown = document.getElementById(`quality${providerValue.charAt(0).toUpperCase() + providerValue.slice(1)}`); // Changed ID pattern
-                    if (qualityDropdown && qualityDropdown.value !== 'all') { // Only include if not default
+                    const qualityDropdown = document.getElementById(`quality${providerValue.charAt(0).toUpperCase() + providerValue.slice(1)}`);
+                    if (qualityDropdown && qualityDropdown.value !== 'all') {
                         qualityPreferences[providerValue] = qualityDropdown.value;
                         hasQualityPreferences = true;
                     }
                 }
             });
 
-            const queryParams = [];
+            // Build the path components for the new URL format
+            let pathParams = [];
+            let queryParams = [];
+            let manifestPersonalized = false;
 
-            // Only add the providers query param if a SUBSET is selected
-            if (selectedProviders.length > 0 && selectedProviders.length < totalProviders) {
-                queryParams.push(`providers=${selectedProviders.join(',')}`);
-            }
+            // Cookie and Region handling: Only add if ShowBox is selected AND cookie is valid
+            const isShowBoxSelected = showboxCheckbox && showboxCheckbox.checked;
+            const isCookieValid = cookieStatusIndicator.classList.contains('valid');
 
-            if (hasQualityPreferences) {
-                queryParams.push(`min_qualities=${encodeURIComponent(JSON.stringify(qualityPreferences))}`);
-            }
-
-            // Only include region if ShowBox is selected AND a valid cookie exists
-            if (showboxCheckbox && showboxCheckbox.checked && cookieStatusIndicator.classList.contains('valid')) {
-                const regionValue = regionSelector ? regionSelector.value : null;
+            if (isShowBoxSelected && cookieValue && isCookieValid) {
+                pathParams.push(`cookie=${encodeURIComponent(cookieValue)}`);
+                queryParams.push(`cookie=${encodeURIComponent(cookieValue)}`);
                 if (regionValue) {
+                    pathParams.push(`region=${regionValue}`);
                     queryParams.push(`region=${regionValue}`);
                 }
+                manifestPersonalized = true;
             }
 
-            let finalQueryString = '';
+            // Providers handling: Only add if a subset is selected
+            if (selectedProviders.length > 0 && selectedProviders.length < totalProviders) {
+                pathParams.push(`providers=${selectedProviders.join(',')}`);
+                queryParams.push(`providers=${selectedProviders.join(',')}`);
+                manifestPersonalized = true;
+            }
+
+            // Quality preferences handling
+            if (hasQualityPreferences) {
+                const encodedQualities = encodeURIComponent(JSON.stringify(qualityPreferences));
+                pathParams.push(`min_qualities=${encodedQualities}`);
+                queryParams.push(`min_qualities=${encodedQualities}`);
+                manifestPersonalized = true;
+            }
+
+            // ScraperAPI key handling
+            if (scraperApiKeyValue) {
+                pathParams.push(`scraper_api_key=${encodeURIComponent(scraperApiKeyValue)}`);
+                queryParams.push(`scraper_api_key=${encodeURIComponent(scraperApiKeyValue)}`);
+                manifestPersonalized = true;
+            }
+
+            // Create both URL formats
+            let pathString = '';
+            if (pathParams.length > 0) {
+                pathString = pathParams.join('/') + '/';
+            }
+            
+            let queryString = '';
             if (queryParams.length > 0) {
-                finalQueryString = '?' + queryParams.join('&');
+                queryString = '?' + queryParams.join('&');
             }
 
-            const customManifestURL = `${window.location.origin}/manifest.json${finalQueryString}`;
-            const customInstallUrl = `stremio://${customManifestURL.replace(/^https?:\/\//, '')}`;
-
-            // Update main buttons
-            currentManifestUrlToCopy = customManifestURL;
-            currentInstallUrl = customInstallUrl;
+            // Android-compatible URL (path-based format)
+            const newPathManifestURL = `${window.location.origin}/${pathString}manifest.json`;
+            // Legacy URL (query-based format, for backward compatibility)
+            const newQueryManifestURL = `${window.location.origin}/manifest.json${queryString}`;
+            
+            // Generate a configuration URL that preserves all settings
+            const configureUrl = `${window.location.origin}/${pathString}configure`;
+            
+            // Set the URLs for use
+            currentManifestUrlToCopy = newPathManifestURL; // Prefer Android-compatible URL for copying
+            currentInstallUrl = `stremio://${newPathManifestURL.replace(/^https?:\/\//, '')}`;
             if (installLink) installLink.href = currentInstallUrl;
+            
+            // Update the configure link if it exists
+            const configureLink = document.getElementById('configureLink');
+            if (configureLink) {
+                configureLink.href = configureUrl;
+                configureLink.style.display = manifestPersonalized ? 'block' : 'none';
+            }
 
-            // Show confirmation toast
-            toast.textContent = selectedProviders.length === totalProviders 
-                ? "Using all providers! Main buttons updated." 
-                : `Using ${selectedProviders.length} providers! Main buttons updated.`;
+            if (manifestPersonalized) {
+                personalManifestUrlSpan.textContent = newPathManifestURL;
+                manifestResult.style.display = 'block';
+                toast.textContent = "Personalized manifest URL updated!";
+            } else {
+                // If no personalization options are active, revert to default and hide section
+                personalManifestUrlSpan.textContent = defaultManifestUrl; // Show default if nothing custom
+                manifestResult.style.display = 'none';
+                currentManifestUrlToCopy = defaultManifestUrl;
+                currentInstallUrl = defaultInstallProtocolUrl;
+                if (installLink) installLink.href = defaultInstallProtocolUrl;
+                toast.textContent = "Manifest reverted to default settings.";
+            }
+            
             toast.classList.add('show');
             setTimeout(() => { toast.classList.remove('show'); }, 3000);
         }
 
-        // Add event listener for the Apply button
+        // Add event listener for the Apply button (now calls the new function)
         if (applyProvidersBtn) {
-            applyProvidersBtn.addEventListener('click', applyProviderSelectionOnly);
+            applyProvidersBtn.addEventListener('click', regeneratePersonalizedManifest);
         }
 
         // --- Event listeners for provider selection ---
@@ -1979,7 +2293,8 @@
             selectAllProvidersBtn.addEventListener('click', () => {
                 providerCheckboxes.forEach(checkbox => checkbox.checked = true);
                 updateCookieSectionState(); // Update cookie section state
-                updateQualityDropdownStates(); // Changed call
+                updateQualityDropdownStates(); 
+                updateScraperApiKeyInputState(); // Update ScraperAPI input state
                 toast.textContent = "All providers selected. Click 'Apply Selection' to update.";
                 toast.classList.add('show');
                 setTimeout(() => { toast.classList.remove('show'); }, 3000);
@@ -1990,7 +2305,8 @@
             deselectAllProvidersBtn.addEventListener('click', () => {
                 providerCheckboxes.forEach(checkbox => checkbox.checked = false);
                 updateCookieSectionState(); // Update cookie section state
-                updateQualityDropdownStates(); // Changed call
+                updateQualityDropdownStates(); 
+                updateScraperApiKeyInputState(); // Update ScraperAPI input state
                 toast.textContent = "All providers deselected. Click 'Apply Selection' to update.";
                 toast.classList.add('show');
                 setTimeout(() => { toast.classList.remove('show'); }, 3000);
@@ -2001,23 +2317,35 @@
         if (showboxCheckbox) {
             showboxCheckbox.addEventListener('change', () => {
                 updateCookieSectionState();
-                updateQualityDropdownStates(); // Changed call
-                toast.textContent = `Provider selection changed. ${showboxCheckbox.checked ? 'ShowBox enabled, cookie section available.' : 'ShowBox disabled, cookie section disabled.'} Click "Apply Selection" to update manifest.`;
-                toast.classList.add('show');
-                setTimeout(() => { toast.classList.remove('show'); }, 3000);
+                updateQualityDropdownStates();
+                // updateScraperApiKeyInputState(); // Not strictly needed here unless Showbox affects Xprime directly
+                // Instead of direct toast, let user click "Apply" or "Set Cookie" or blur API key
+                // toast.textContent = `Provider selection changed. ${showboxCheckbox.checked ? 'ShowBox enabled, cookie section available.' : 'ShowBox disabled, cookie section disabled.'} Click "Apply Selection" to update manifest.`;
+                // toast.classList.add('show');
             });
         }
 
         providerCheckboxes.forEach(checkbox => {
             if (checkbox !== showboxCheckbox) { // Skip ShowBox as it has its own handler
                 checkbox.addEventListener('change', () => {
-                    updateQualityDropdownStates(); // Changed call
-                    toast.textContent = `Provider selection changed. Click \"Apply Selection\" to update manifest.`;
-                    toast.classList.add('show');
-                    setTimeout(() => { toast.classList.remove('show'); }, 3000);
+                    updateQualityDropdownStates();
+                    updateScraperApiKeyInputState(); // Update ScraperAPI input state when any other provider changes
+                    // toast.textContent = `Provider selection changed. Click \"Apply Selection\" to update manifest.`;
+                    // toast.classList.add('show');
+                    // setTimeout(() => { toast.classList.remove('show'); }, 3000);
                 });
             }
         });
+        
+        // Add event listener for ScraperAPI key input (on blur)
+        if (scraperApiKeyInput) {
+            scraperApiKeyInput.addEventListener('blur', regeneratePersonalizedManifest);
+        }
+
+        // NEW: Event listener for Apply Scraper API Key button
+        if (applyScraperApiKeyBtn) {
+            applyScraperApiKeyBtn.addEventListener('click', regeneratePersonalizedManifest);
+        }
 
         // --- Disable Set Cookie button initially ---
         if (setCookieBtn) {
@@ -2253,97 +2581,37 @@
             // Make it async
             setCookieBtn.addEventListener('click', async () => {
                 const cookieValue = cookieInput.value.trim();
-                const regionValue = regionSelector.value;
-                
-                // --- Get selected providers ---
-                const selectedProviders = [];
-                providerCheckboxes.forEach(checkbox => {
-                    if (checkbox.checked) {
-                        selectedProviders.push(checkbox.value);
-                    }
-                });
-
-                // --- Get quality preferences ---
-                const qualityPreferences = {};
-                let hasQualityPreferences = false; // Define it here for this scope
-                providerCheckboxes.forEach(checkbox => {
-                    if (checkbox.checked) {
-                        const providerValue = checkbox.value;
-                        const qualityDropdown = document.getElementById(`quality${providerValue.charAt(0).toUpperCase() + providerValue.slice(1)}`);
-                        if (qualityDropdown && qualityDropdown.value !== 'all') {
-                            qualityPreferences[providerValue] = qualityDropdown.value;
-                            hasQualityPreferences = true;
-                        }
-                    }
-                });
+                // const regionValue = regionSelector.value; // Not needed here, regeneratePersonalizedManifest will get it
+                // const scraperApiKeyValue = document.getElementById('scraperApiKeyInput').value.trim(); // Not needed here
 
                 // Perform server-side cookie validation before generating manifest
-                if (cookieValue) { // Only validate if there's a cookie
+                if (cookieValue) {
                     const isValid = await checkCookieOnServer(cookieValue);
                     if (!isValid) {
                         toast.textContent = "Cookie is invalid. Please check and try again.";
-                        if (!toast.classList.contains('show')) { // Avoid overlapping toasts
+                        if (!toast.classList.contains('show')) {
                            toast.classList.add('show');
                            setTimeout(() => { toast.classList.remove('show'); }, 4000);
                         }
+                        // Explicitly call regeneratePersonalizedManifest to ensure UI updates if cookie becomes invalid
+                        await regeneratePersonalizedManifest(); 
                         return; 
                     }
-                } else { // No cookie entered
-                     cookieStatusIndicator.className = 'cookie-status-indicator'; // Reset to neutral
+                    // If valid, proceed to regenerate manifest which includes the cookie
+                } else {
+                     cookieStatusIndicator.className = 'cookie-status-indicator';
+                     toast.textContent = "Please enter your FebBox cookie.";
+                     toast.classList.add('show');
+                     setTimeout(() => { toast.classList.remove('show'); }, 3000);
+                     await regeneratePersonalizedManifest(); // Update manifest (will revert to default if no cookie)
+                     return;
                 }
                 
-                if (!cookieValue) {
-                    toast.textContent = "Please enter your FebBox cookie.";
-                    toast.classList.add('show');
-                    setTimeout(() => { toast.classList.remove('show'); }, 3000);
-                    
-                    // Revert main buttons to default if cookie is cleared
-                    currentManifestUrlToCopy = defaultManifestUrl;
-                    currentInstallUrl = defaultInstallProtocolUrl;
-                    if (installLink) installLink.href = currentInstallUrl;
-                    manifestResult.style.display = 'none'; // Hide personalized section
+                // All checks passed or cookie is now valid, regenerate the manifest with all settings
+                await regeneratePersonalizedManifest();
 
-                    return;
-                }
-
-                // URL-encode the cookie to make it safe for a query parameter
-                const encodedCookie = encodeURIComponent(cookieValue);
-                
-                // Construct query parameters
-                const queryParams = [];
-                queryParams.push(`cookie=${encodedCookie}`);
-                queryParams.push(`region=${regionValue}`);
-
-                if (selectedProviders.length > 0 && selectedProviders.length < totalProviders) {
-                    queryParams.push(`providers=${selectedProviders.join(',')}`);
-                }
-                
-                if (hasQualityPreferences) {
-                    queryParams.push(`min_qualities=${encodeURIComponent(JSON.stringify(qualityPreferences))}`);
-                }
-
-                let finalQueryString = '';
-                if (queryParams.length > 0) {
-                    finalQueryString = '?' + queryParams.join('&');
-                }
-
-                const personalizedManifestURL = `${window.location.origin}/manifest.json${finalQueryString}`;
-                const personalizedInstallUrl = `stremio://${personalizedManifestURL.replace(/^https?:\/\//, '')}`;
-
-                personalManifestUrlSpan.textContent = personalizedManifestURL;
-                manifestResult.style.display = 'block';
-
-                // Update main buttons
-                currentManifestUrlToCopy = personalizedManifestURL;
-                currentInstallUrl = personalizedInstallUrl;
-                if (installLink) installLink.href = currentInstallUrl;
-
-                toast.textContent = `Personalized manifest ready with ${regionValue} region! Main buttons updated.`;
-                toast.classList.add('show');
-                setTimeout(() => { toast.classList.remove('show'); }, 3000);
-                
-                // Store the newly selected region for region status tracking
-                lastSelectedRegion = regionValue;
+                // Store the newly selected region for region status tracking (already done by regenerate)
+                // lastSelectedRegion = regionValue; // Not needed here
                 
                 // Restart region status checking
                 startRegionStatusCheck();
@@ -2352,10 +2620,30 @@
 
         // Function to pre-fill cookie and region from URL query parameters
         const prefillFromUrl = () => {
+            // Extract parameters from query string
             const urlParams = new URLSearchParams(window.location.search);
-            const cookieFromUrl = urlParams.get('cookie');
-            const regionFromUrl = urlParams.get('region');
             
+            // Extract parameters from path segments (new Android-compatible format)
+            const pathParams = {};
+            const pathSegments = window.location.pathname.split('/').filter(segment => segment);
+            pathSegments.forEach(segment => {
+                const paramParts = segment.split('=');
+                if (paramParts.length === 2) {
+                    const [key, value] = paramParts;
+                    pathParams[key] = value;
+                }
+            });
+            
+            // Prioritize path params over query params for each parameter
+            
+            // Handle cookie parameter
+            const cookieFromUrl = pathParams.cookie || urlParams.get('cookie');
+            const regionFromUrl = pathParams.region || urlParams.get('region');
+            const providersFromUrl = pathParams.providers || urlParams.get('providers');
+            const minQualitiesFromUrl = pathParams.min_qualities || urlParams.get('min_qualities');
+            const scraperApiKeyFromUrl = pathParams.scraper_api_key || urlParams.get('scraper_api_key');
+            
+            // Set cookie and region
             if (cookieFromUrl && cookieInput) {
                 try {
                     const decodedCookie = decodeURIComponent(cookieFromUrl);
@@ -2373,12 +2661,77 @@
                 }
             }
             
-            // Optionally, automatically process pre-filled values
-            if ((cookieFromUrl || regionFromUrl) && setCookieBtn) {
-                setCookieBtn.click(); // Simulate click to process and show manifest
-                toast.textContent = "Settings loaded from URL and processed!";
-                toast.classList.add('show');
-                setTimeout(() => { toast.classList.remove('show'); }, 3500);
+            // Set providers
+            if (providersFromUrl && providerCheckboxes) {
+                const selectedProviders = providersFromUrl.split(',').map(p => p.trim().toLowerCase());
+                
+                // First uncheck all providers
+                providerCheckboxes.forEach(checkbox => {
+                    checkbox.checked = false;
+                });
+                
+                // Then check only the selected ones
+                providerCheckboxes.forEach(checkbox => {
+                    if (selectedProviders.includes(checkbox.value.toLowerCase())) {
+                        checkbox.checked = true;
+                    }
+                });
+                
+                // Update UI state based on provider selections
+                updateCookieSectionState();
+                updateQualityDropdownStates();
+                updateScraperApiKeyInputState();
+            }
+            
+            // Set minimum qualities
+            if (minQualitiesFromUrl) {
+                try {
+                    const decodedQualities = decodeURIComponent(minQualitiesFromUrl);
+                    const qualityPreferences = JSON.parse(decodedQualities);
+                    
+                    // Apply quality preferences to dropdowns
+                    Object.keys(qualityPreferences).forEach(provider => {
+                        const qualityDropdown = document.getElementById(`quality${provider.charAt(0).toUpperCase() + provider.slice(1)}`);
+                        if (qualityDropdown) {
+                            qualityDropdown.value = qualityPreferences[provider];
+                        }
+                    });
+                } catch (e) {
+                    console.error("Error parsing min_qualities from URL for pre-fill:", e.message);
+                }
+            }
+            
+            // Set ScraperAPI key
+            if (scraperApiKeyFromUrl && scraperApiKeyInput) {
+                try {
+                    scraperApiKeyInput.value = decodeURIComponent(scraperApiKeyFromUrl);
+                } catch (e) {
+                    console.error("Error decoding ScraperAPI key from URL for pre-fill:", e.message);
+                }
+            }
+            
+            // Automatically validate cookie if one is provided
+            if (cookieFromUrl && cookieInput && cookieInput.value) {
+                // Trigger cookie validation
+                checkCookieOnServer(cookieInput.value);
+                
+                // Generate manifest after a short delay to allow validation to complete
+                setTimeout(() => {
+                    if (setCookieBtn) {
+                        setCookieBtn.click(); // Simulate Set Cookie button click
+                        toast.textContent = "Settings loaded from URL and applied!";
+                        toast.classList.add('show');
+                        setTimeout(() => { toast.classList.remove('show'); }, 3500);
+                    }
+                }, 1000);
+            } else if ((providersFromUrl || minQualitiesFromUrl || scraperApiKeyFromUrl) && applyProvidersBtn) {
+                // If we have any other parameters but no cookie, just apply providers
+                setTimeout(() => {
+                    applyProvidersBtn.click(); // Simulate Apply Selection button click
+                    toast.textContent = "Provider settings loaded from URL and applied!";
+                    toast.classList.add('show');
+                    setTimeout(() => { toast.classList.remove('show'); }, 3500);
+                }, 500);
             }
         };
 
@@ -2495,10 +2848,11 @@
         document.addEventListener('DOMContentLoaded', () => {
             // Initialize cookie section state based on ShowBox checkbox
             updateCookieSectionState();
-            updateQualityDropdownStates(); // Changed call, and initialize quality dropdown states
+            updateQualityDropdownStates(); 
+            updateScraperApiKeyInputState(); // Initialize ScraperAPI input state on load
             
             startRegionStatusCheck();
-            // Initialize indicator if cookie is pre-filled
+            // Initialize indicator if cookie is pre-filled and call regenerate manifest
             if (cookieInput && cookieInput.value.trim()) {
                 checkCookieOnServer(cookieInput.value.trim());
             }
@@ -2536,27 +2890,178 @@
                 const providerValue = checkbox.value;
                 const qualityDropdown = document.getElementById(`quality${providerValue.charAt(0).toUpperCase() + providerValue.slice(1)}`); // Changed ID pattern
                 if (qualityDropdown) {
-                    if (providerValue === 'soapertv' || providerValue === 'hollymoviehd') {
-                        qualityDropdown.disabled = true; // Always keep these disabled
+                    if (providerValue === 'soapertv') { // HollyMovieHD removed from this condition
+                        qualityDropdown.disabled = true; // Always keep SoaperTV disabled
                     } else {
                         qualityDropdown.disabled = !checkbox.checked;
                     }
                 }
             });
         }
+
+        // --- MANIFEST URL MIGRATION TOOL SCRIPT ---
+        const vercelManifestInput = document.getElementById('vercelManifestInput');
+        const convertManifestBtn = document.getElementById('convertManifestBtn');
+        const koyebManifestOutputContainer = document.getElementById('koyebManifestOutputContainer');
+        const koyebManifestOutput = document.getElementById('koyebManifestOutput');
+        const copyKoyebManifestBtn = document.getElementById('copyKoyebManifestBtn');
+
+        if (convertManifestBtn) {
+            convertManifestBtn.addEventListener('click', () => {
+                const vercelUrl = vercelManifestInput.value.trim();
+                if (!vercelUrl) {
+                    toast.textContent = 'Please paste your Vercel manifest URL.';
+                    toast.classList.add('show');
+                    setTimeout(() => { toast.classList.remove('show'); }, 3000);
+                    return;
+                }
+
+                if (!vercelUrl.includes('nuvioaddon.vercel.app')) {
+                    toast.textContent = 'This does not look like a Nuvio Vercel URL.';
+                    toast.classList.add('show');
+                    setTimeout(() => { toast.classList.remove('show'); }, 3000);
+                    return;
+                }
+
+                let koyebUrl;
+                const koyebBase = 'https://aesthetic-jodie-tapframe-ab46446c.koyeb.app';
+                
+                if (vercelUrl.includes('manifest.json?')) {
+                    // Handle query parameter format - convert to path-based format for Android compatibility
+                    const queryString = vercelUrl.split('manifest.json?')[1];
+                    const params = new URLSearchParams(queryString);
+                    
+                    // Build path parameters
+                    const pathParams = [];
+                    params.forEach((value, key) => {
+                        pathParams.push(`${key}=${value}`);
+                    });
+                    
+                    if (pathParams.length > 0) {
+                        koyebUrl = `${koyebBase}/${pathParams.join('/')}/manifest.json`;
+                    } else {
+                        koyebUrl = `${koyebBase}/manifest.json`;
+                    }
+                } else if (vercelUrl.includes('/manifest.json')) {
+                    // URL might already be in path format, just replace domain
+                    const pathPart = vercelUrl.split('nuvioaddon.vercel.app')[1];
+                    koyebUrl = `${koyebBase}${pathPart}`;
+                } else {
+                    // Fallback for any other format - just use base URL
+                    koyebUrl = `${koyebBase}/manifest.json`;
+                }
+                
+                koyebManifestOutput.value = koyebUrl;
+                koyebManifestOutputContainer.style.display = 'block';
+
+                toast.textContent = 'Manifest URL converted to Koyeb with Android-compatible format!';
+                toast.classList.add('show');
+                setTimeout(() => { toast.classList.remove('show'); }, 3000);
+            });
+        }
+
+        if (copyKoyebManifestBtn) {
+            copyKoyebManifestBtn.addEventListener('click', async () => {
+                if (!koyebManifestOutput.value) return;
+                try {
+                    await navigator.clipboard.writeText(koyebManifestOutput.value);
+                    toast.textContent = 'New Koyeb manifest URL copied!';
+                    toast.classList.add('show');
+                    setTimeout(() => { toast.classList.remove('show'); }, 3000);
+                } catch (err) {
+                    console.error('Failed to copy Koyeb manifest: ', err);
+                    toast.textContent = 'Failed to copy new URL.';
+                    toast.classList.add('show');
+                    setTimeout(() => { toast.classList.remove('show'); }, 3000);
+                }
+            });
+        }
+        // --- END MANIFEST URL MIGRATION TOOL SCRIPT ---
+
+        // NEW: ScraperAPI Tutorial Panel Elements
+        const scraperApiTutorialPanel = document.getElementById('scraperApiTutorialPanel');
+        const closeScraperApiTutorialBtn = document.getElementById('closeScraperApiTutorial');
+        const howToGetScraperApiKeyBtn = document.getElementById('howToGetScraperApiKeyBtn');
+
+        if (closeTutorialBtn) {
+            closeTutorialBtn.addEventListener('click', () => {
+                videoTutorialPanel.classList.remove('show');
+                // Note: Can't directly pause iframe videos
+            });
+        }
+
+        // NEW: Event listeners for ScraperAPI tutorial panel
+        if (closeScraperApiTutorialBtn && scraperApiTutorialPanel) {
+            closeScraperApiTutorialBtn.addEventListener('click', () => {
+                scraperApiTutorialPanel.classList.remove('show');
+            });
+        }
+
+        if (howToGetScraperApiKeyBtn && scraperApiTutorialPanel) {
+            howToGetScraperApiKeyBtn.addEventListener('click', () => {
+                scraperApiTutorialPanel.classList.add('show');
+            });
+        }
+
     </script>
     <script src="/_vercel/insights/script.js" defer></script>
     <!-- Buy Me a Coffee Widget -->
-    <script data-name="BMC-Widget" 
-            data-cfasync="false" 
-            src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js" 
-            data-id="tapframe" 
-            data-description="Support me on Buy me a coffee!" 
-            data-message="Thanks for visiting! If you find this useful, you can support me by buying me a coffee. Your tips help cover hosting and maintenance of this and other addons." 
-            data-color="#5F7FFF" 
-            data-position="Left" 
-            data-x_margin="18" 
-            data-y_margin="18">
+    
+        
+            
+            
+            
+            
+            
+            
+            
+            
+            
+    
+
+    <!-- Add at the end of the file, before the closing body tag -->
+    <script>
+        // Instance banner logic - show Koyeb down banner
+        (function() {
+            const koyebDownBanner = document.getElementById('koyebDownBanner');
+            const closeKoyebDownBanner = document.getElementById('closeKoyebDownBanner');
+            
+            // Show Koyeb down banner by default
+            if (koyebDownBanner && !localStorage.getItem('koyebDownBannerDismissed')) {
+                koyebDownBanner.style.display = 'block';
+                document.body.classList.add('has-instance-banner');
+            }
+            
+            // Handle close button for Koyeb down banner
+            if (closeKoyebDownBanner) {
+                closeKoyebDownBanner.addEventListener('click', () => {
+                    koyebDownBanner.style.display = 'none';
+                    document.body.classList.remove('has-instance-banner');
+                    // Remember dismiss for 24 hours
+                    localStorage.setItem('koyebDownBannerDismissed', 'true');
+                    setTimeout(() => {
+                        localStorage.removeItem('koyebDownBannerDismissed');
+                    }, 24 * 60 * 60 * 1000);
+                });
+            }
+            
+            // Hide the old Vercel-to-Koyeb banner
+            const instanceBanner = document.getElementById('instanceBanner');
+            if (instanceBanner) {
+                instanceBanner.style.display = 'none';
+            }
+        })();
+    </script>
+    
+    <!-- Ko-fi floating button -->
+    <script src='https://storage.ko-fi.com/cdn/scripts/overlay-widget.js'></script>
+    <script>
+      kofiWidgetOverlay.draw('tapframe', {
+        'type': 'floating-chat',
+        'floating-chat.donateButton.text': 'Support me',
+        'floating-chat.donateButton.background-color': '#00b9fe',
+        'floating-chat.donateButton.text-color': '#fff'
+      });
     </script>
 </body>
 </html> 

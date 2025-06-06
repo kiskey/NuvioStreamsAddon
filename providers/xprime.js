@@ -6,6 +6,7 @@ const axios = require('axios'); // For making HTTP requests including HEAD reque
 const crypto = require('crypto'); // For hashing URLs
 
 const XPRIME_PROXY_URL = process.env.XPRIME_PROXY_URL;
+// const USE_SCRAPER_API = process.env.USE_SCRAPER_API === 'true'; // REMOVED: No longer using this env var as a gatekeeper
 const MAX_RETRIES_XPRIME = 3;
 const RETRY_DELAY_MS_XPRIME = 1000;
 
@@ -124,15 +125,14 @@ const fetchStreamSize = async (url) => {
 };
 
 const BROWSER_HEADERS_XPRIME = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'Accept-Language': 'en-US,en;q=0.9',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
-    'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'Sec-Ch-Ua': '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
     'Sec-Ch-Ua-Mobile': '?0',
     'Sec-Ch-Ua-Platform': '"Windows"',
-    'Upgrade-Insecure-Requests': '1',
     'Connection': 'keep-alive'
 };
 
@@ -145,12 +145,22 @@ async function fetchWithRetryXprime(url, options, maxRetries = MAX_RETRIES_XPRIM
             if (!response.ok) {
                 let errorBody = '';
                 try { errorBody = await response.text(); } catch (e) { /* ignore */ }
-                throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}. Body: ${errorBody.substring(0, 200)}`);
+                // Construct an error object that includes the status
+                const httpError = new Error(`HTTP error! Status: ${response.status} ${response.statusText}. Body: ${errorBody.substring(0, 200)}`);
+                httpError.status = response.status; // Attach status to the error object
+                throw httpError;
             }
             return response;
         } catch (error) {
             lastError = error;
             console.warn(`[Xprime.tv] Fetch attempt ${attempt}/${maxRetries} failed for ${url}: ${error.message}`);
+            
+            // If it's a 403 error, stop retrying immediately.
+            if (error.status === 403) {
+                console.log(`[Xprime.tv] Encountered 403 Forbidden for ${url}. Halting retries.`);
+                throw lastError; // Re-throw the error to exit the retry loop
+            }
+
             if (attempt < maxRetries) {
                 await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS_XPRIME * Math.pow(2, attempt - 1)));
             }
@@ -161,7 +171,7 @@ async function fetchWithRetryXprime(url, options, maxRetries = MAX_RETRIES_XPRIM
     else throw new Error(`[Xprime.tv] All fetch attempts failed for ${url} without a specific error captured.`); // Fallback error
 }
 
-async function getXprimeStreams(title, year, type, seasonNum, episodeNum, useProxy = true) {
+async function getXprimeStreams(title, year, type, seasonNum, episodeNum, useProxy = true, scraperApiKey = null) {
     if (!title || !year) {
         console.log('[Xprime.tv] Skipping fetch: title or year is missing.');
         return [];
@@ -169,7 +179,9 @@ async function getXprimeStreams(title, year, type, seasonNum, episodeNum, usePro
 
     let rawXprimeStreams = [];
     try {
-        console.log(`[Xprime.tv] Attempting to fetch streams for '${title}' (${year}), Type: ${type}, S: ${seasonNum}, E: ${episodeNum}, UseProxy: ${useProxy}`);
+        // Updated log to be more descriptive of parameter sources
+        console.log(`[Xprime.tv] Fetch attempt for '${title}' (${year}). Type: ${type}, S: ${seasonNum}, E: ${episodeNum}. CustomProxyParam(useProxy): ${useProxy}, ScraperApiKeyParam: ${scraperApiKey ? 'Yes' : 'No'}`);
+        
         const xprimeName = encodeURIComponent(title);
         let xprimeApiUrl;
 
@@ -188,26 +200,105 @@ async function getXprimeStreams(title, year, type, seasonNum, episodeNum, usePro
             return [];
         }
 
-        let fetchUrl = xprimeApiUrl;
-        if (useProxy && XPRIME_PROXY_URL) {
-            console.log(`[Xprime.tv] Using proxy: ${XPRIME_PROXY_URL}`);
-            // Ensure proxy URL doesn't have a trailing slash before appending query params
-            const cleanedProxyUrl = XPRIME_PROXY_URL.replace(/\/$/, '');
-            fetchUrl = `${cleanedProxyUrl}/?destination=${encodeURIComponent(xprimeApiUrl)}`;
-        } else {
-            console.log(`[Xprime.tv] Fetching directly (Proxy disabled or not configured).`);
-        }
+        let xprimeResult;
 
-        console.log(`[Xprime.tv] Fetching from: ${fetchUrl}`);
-        const xprimeResponse = await fetchWithRetryXprime(fetchUrl, {
-            headers: {
-                ...BROWSER_HEADERS_XPRIME,
-                'Origin': 'https://xprime.tv',
-                'Referer': 'https://xprime.tv/',
+        // Decision logic for fetching - PRIORITIZE scraperApiKey if present
+        if (scraperApiKey) { // If a scraperApiKey is provided (from user config), try to use it.
+            console.log('[Xprime.tv] Attempting to use ScraperAPI (key provided).');
+            try {
+                const scraperApiUrl = 'https://api.scraperapi.com/';
+                const scraperResponse = await axios.get(scraperApiUrl, {
+                    params: {
+                        api_key: scraperApiKey,
+                        url: xprimeApiUrl
+                    },
+                    timeout: 25000 // Increased timeout for ScraperAPI
+                });
+
+                // Check if we got a Cloudflare challenge page
+                const responseData = scraperResponse.data;
+                if (typeof responseData === 'string' && responseData.includes("Just a moment...")) {
+                    console.error('[Xprime.tv] ScraperAPI returned Cloudflare challenge. Key might be rate-limited or insufficient for this challenge.');
+                    return []; // Return empty on Cloudflare challenge
+                }
+
+                console.log('[Xprime.tv] ScraperAPI request successful.');
+                xprimeResult = scraperResponse.data;
+                
+            } catch (scraperError) {
+                console.error('[Xprime.tv] Error using ScraperAPI:', scraperError.message);
+                if (scraperError.response) {
+                    console.error(`[Xprime.tv] ScraperAPI Response Status: ${scraperError.response.status}`);
+                    console.error(`[Xprime.tv] ScraperAPI Response Data:`, typeof scraperError.response.data === 'string' 
+                        ? scraperError.response.data.substring(0, 200) 
+                        : JSON.stringify(scraperError.response.data).substring(0, 200));
+                }
+                // For this implementation, if ScraperAPI is attempted (because a key was provided) and fails, we return empty.
+                // We don't fall back to other methods if a key was explicitly provided but failed.
+                return []; 
             }
-        });
-        const xprimeResult = await xprimeResponse.json();
+        } else if (useProxy && XPRIME_PROXY_URL) {
+            // No ScraperAPI key provided by user. Now check if a custom proxy (controlled by 'useProxy' param and XPRIME_PROXY_URL env var) should be used.
+            console.log(`[Xprime.tv] No ScraperAPI key provided. Attempting to use custom proxy: ${XPRIME_PROXY_URL}`);
+            const cleanedProxyUrl = XPRIME_PROXY_URL.replace(/\/$/, '');
+            const fetchUrl = `${cleanedProxyUrl}/?destination=${encodeURIComponent(xprimeApiUrl)}`;
+            console.log(`[Xprime.tv] Fetching via custom proxy: ${fetchUrl}`);
+            const xprimeResponse = await fetchWithRetryXprime(fetchUrl, {
+                headers: {
+                    ...BROWSER_HEADERS_XPRIME,
+                    'Origin': 'https://pstream.org',
+                    'Referer': 'https://pstream.org/',
+                    'Sec-Fetch-Mode': 'cors',
+                    'Sec-Fetch-Site': 'cross-site',
+                    'Sec-Fetch-Dest': 'empty'
+                }
+            });
+            xprimeResult = await xprimeResponse.json();
+        } else {
+            // No ScraperAPI key, and custom proxy not used/configured.
+            console.log(`[Xprime.tv] No ScraperAPI key and no custom proxy. Fetching directly: ${xprimeApiUrl}`);
+            const xprimeResponse = await fetchWithRetryXprime(xprimeApiUrl, {
+                headers: {
+                    ...BROWSER_HEADERS_XPRIME,
+                    'Origin': 'https://pstream.org',
+                    'Referer': 'https://pstream.org/',
+                    'Sec-Fetch-Mode': 'cors',
+                    'Sec-Fetch-Site': 'cross-site',
+                    'Sec-Fetch-Dest': 'empty'
+                }
+            });
+            xprimeResult = await xprimeResponse.json();
+        }
+        
+        // Process the result (common for all fetch methods)
+        processXprimeResult(xprimeResult);
+        
+        // Fetch stream sizes concurrently for all Xprime streams
+        if (rawXprimeStreams.length > 0) {
+            console.time('[Xprime.tv] Fetch stream sizes');
+            const sizePromises = rawXprimeStreams.map(async (stream) => {
+                stream.size = await fetchStreamSize(stream.url);
+                return stream; // Return the modified stream
+            });
+            const streamsWithSizes = await Promise.all(sizePromises);
+            console.timeEnd('[Xprime.tv] Fetch stream sizes');
+            
+            console.log(`[Xprime.tv] Found ${rawXprimeStreams.length} streams with sizes.`);
+        }
+        
+        return rawXprimeStreams;
 
+    } catch (xprimeError) {
+        console.error('[Xprime.tv] Error fetching or processing streams:', xprimeError.message);
+        // It's good practice to log the stack trace for better debugging if available
+        if (xprimeError.stack) {
+            console.error(xprimeError.stack);
+        }
+        return []; // Return empty array on error
+    }
+
+    // Helper function to process Xprime API response
+    function processXprimeResult(xprimeResult) {
         const processXprimeItem = (item) => {
             if (item && typeof item === 'object' && !item.error && item.streams && typeof item.streams === 'object') {
                 Object.entries(item.streams).forEach(([quality, fileUrl]) => {
@@ -232,30 +323,9 @@ async function getXprimeStreams(title, year, type, seasonNum, episodeNum, usePro
             xprimeResult.forEach(processXprimeItem);
         } else if (xprimeResult) { // Check if xprimeResult is not null/undefined
             processXprimeItem(xprimeResult);
+        } else {
+            console.log('[Xprime.tv] No result from Xprime API to process.');
         }
-        
-        // Fetch stream sizes concurrently for all Xprime streams
-        if (rawXprimeStreams.length > 0) {
-            console.time('[Xprime.tv] Fetch stream sizes');
-            const sizePromises = rawXprimeStreams.map(async (stream) => {
-                stream.size = await fetchStreamSize(stream.url);
-                return stream; // Return the modified stream
-            });
-            const streamsWithSizes = await Promise.all(sizePromises);
-            console.timeEnd('[Xprime.tv] Fetch stream sizes');
-            
-            console.log(`[Xprime.tv] Found ${rawXprimeStreams.length} streams with sizes.`);
-        }
-        
-        return rawXprimeStreams;
-
-    } catch (xprimeError) {
-        console.error('[Xprime.tv] Error fetching or processing streams:', xprimeError.message);
-        // It's good practice to log the stack trace for better debugging if available
-        if (xprimeError.stack) {
-            console.error(xprimeError.stack);
-        }
-        return []; // Return empty array on error
     }
 }
 

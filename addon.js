@@ -10,14 +10,28 @@ const USE_REDIS_CACHE = process.env.USE_REDIS_CACHE === 'true';
 let redis = null;
 if (USE_REDIS_CACHE) {
     try {
+        console.log(`[Redis Cache] Initializing Redis in addon.js. REDIS_URL from env: ${process.env.REDIS_URL ? 'exists and has value' : 'MISSING or empty'}`);
+        if (!process.env.REDIS_URL) {
+            throw new Error("REDIS_URL environment variable is not set or is empty.");
+        }
         redis = new Redis(process.env.REDIS_URL, {
-            maxRetriesPerRequest: 2,
-            connectTimeout: 10000,
-            // TLS is auto-enabled with rediss:// URLs
+            maxRetriesPerRequest: 5,
             retryStrategy(times) {
-                const delay = Math.min(times * 200, 2000);
+                const delay = Math.min(times * 500, 5000);
                 return delay;
-            }
+            },
+            reconnectOnError: function(err) {
+                const targetError = 'READONLY';
+                if (err.message.includes(targetError)) {
+                    return true;
+                }
+                return false;
+            },
+            enableOfflineQueue: true,
+            enableReadyCheck: true,
+            autoResubscribe: true,
+            autoResendUnfulfilledCommands: true,
+            lazyConnect: false
         });
         
         redis.on('error', (err) => {
@@ -43,6 +57,14 @@ console.log(`[addon.js] Cuevana provider fetching enabled: ${ENABLE_CUEVANA_PROV
 const ENABLE_HOLLYMOVIEHD_PROVIDER = process.env.ENABLE_HOLLYMOVIEHD_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
 console.log(`[addon.js] HollyMovieHD provider fetching enabled: ${ENABLE_HOLLYMOVIEHD_PROVIDER}`);
 
+// NEW: Read environment variable for Xprime
+const ENABLE_XPRIME_PROVIDER = process.env.ENABLE_XPRIME_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
+console.log(`[addon.js] Xprime provider fetching enabled: ${ENABLE_XPRIME_PROVIDER}`);
+
+// NEW: Read environment variable for VidZee
+const ENABLE_VIDZEE_PROVIDER = process.env.ENABLE_VIDZEE_PROVIDER !== 'false'; // Defaults to true
+console.log(`[addon.js] VidZee provider fetching enabled: ${ENABLE_VIDZEE_PROVIDER}`);
+
 // NEW: Stream caching config
 const STREAM_CACHE_DIR = process.env.VERCEL ? path.join('/tmp', '.streams_cache') : path.join(__dirname, '.streams_cache');
 const STREAM_CACHE_TTL_MS = 9 * 60 * 1000; // 9 minutes
@@ -56,6 +78,7 @@ const { getSoaperTvStreams } = require('./providers/soapertv.js'); // Import fro
 const { getCuevanaStreams } = require('./providers/cuevana.js'); // Import from cuevana.js
 const { getHianimeStreams } = require('./providers/hianime.js'); // Import from hianime.js
 const { getStreamContent } = require('./providers/vidsrcextractor.js'); // Import from vidsrcextractor.js
+const { getVidZeeStreams } = require('./providers/VidZee.js'); // NEW: Import from VidZee.js
 
 // --- Constants ---
 const TMDB_API_URL = 'https://api.themoviedb.org/3';
@@ -380,14 +403,16 @@ const getStreamFromCache = async (provider, type, id, seasonNum = null, episodeN
 };
 
 // Save streams to cache - Hybrid approach (Redis + file)
-const saveStreamToCache = async (provider, type, id, streams, status = 'ok', seasonNum = null, episodeNum = null, region = null, cookie = null) => {
+const saveStreamToCache = async (provider, type, id, streams, status = 'ok', seasonNum = null, episodeNum = null, region = null, cookie = null, ttlMs = null) => {
     if (!ENABLE_STREAM_CACHE) return;
     
     const cacheKey = getStreamCacheKey(provider, type, id, seasonNum, episodeNum, region, cookie);
+    const effectiveTtlMs = ttlMs !== null ? ttlMs : STREAM_CACHE_TTL_MS; // Use provided TTL or default
+
     const cacheData = {
         streams: streams,
         status: status,
-        expiry: Date.now() + STREAM_CACHE_TTL_MS,
+        expiry: Date.now() + effectiveTtlMs, // Use effective TTL
         timestamp: Date.now()
     };
     
@@ -397,8 +422,8 @@ const saveStreamToCache = async (provider, type, id, streams, status = 'ok', sea
     if (redis) {
         try {
             // PX sets expiry in milliseconds
-            await redis.set(cacheKey, JSON.stringify(cacheData), 'PX', STREAM_CACHE_TTL_MS);
-            console.log(`[Redis Cache] SAVED for ${provider}: ${cacheKey} (${streams.length} streams, status: ${status})`);
+            await redis.set(cacheKey, JSON.stringify(cacheData), 'PX', effectiveTtlMs); // Use effective TTL
+            console.log(`[Redis Cache] SAVED for ${provider}: ${cacheKey} (${streams.length} streams, status: ${status}, TTL: ${effectiveTtlMs / 1000}s)`);
             redisSuccess = true;
         } catch (error) {
             console.warn(`[Redis Cache] WRITE ERROR for ${provider}: ${cacheKey}: ${error.message}`);
@@ -414,7 +439,7 @@ const saveStreamToCache = async (provider, type, id, streams, status = 'ok', sea
         
         // Only log if Redis didn't succeed to avoid redundant logging
         if (!redisSuccess) {
-            console.log(`[File Cache] SAVED for ${provider}: ${fileCacheKey} (${streams.length} streams, status: ${status})`);
+            console.log(`[File Cache] SAVED for ${provider}: ${fileCacheKey} (${streams.length} streams, status: ${status}, TTL: ${effectiveTtlMs / 1000}s)`);
         }
     } catch (error) {
         console.warn(`[File Cache] WRITE ERROR for ${provider}: ${cacheKey}.json: ${error.message}`);
@@ -476,6 +501,7 @@ builder.defineStreamHandler(async (args) => {
     // Use values from requestSpecificConfig (derived from global)
     let userRegionPreference = requestSpecificConfig.region || null;
     let userCookie = requestSpecificConfig.cookie || null; // Already decoded by server.js
+    let userScraperApiKey = requestSpecificConfig.scraper_api_key || null; // NEW: Get ScraperAPI Key
     
     // Log the request information in a more detailed way
     console.log(`Stream request for Stremio type: '${type}', id: '${id}'`);
@@ -508,9 +534,6 @@ builder.defineStreamHandler(async (args) => {
     } else {
         console.log('[addon.js] No specific providers selected by user in global config, will attempt all.');
     }
-
-    // Removed ScraperAPI Key logging
-    console.log("  ScraperAPI Key usage has been removed.");
 
     if (type !== 'movie' && type !== 'series') {
         return { streams: [] };
@@ -646,7 +669,7 @@ builder.defineStreamHandler(async (args) => {
             for (let attempt = 1; attempt <= MAX_SHOWBOX_RETRIES; attempt++) {
                 try {
                     console.log(`[ShowBox] Attempt ${attempt}/${MAX_SHOWBOX_RETRIES}`);
-                    const streams = await getStreamsFromTmdbId(tmdbTypeFromId, tmdbId, seasonNum, episodeNum, userRegionPreference, userCookie);
+                    const streams = await getStreamsFromTmdbId(tmdbTypeFromId, tmdbId, seasonNum, episodeNum, userRegionPreference, userCookie, userScraperApiKey);
                     
             if (streams && streams.length > 0) {
                         console.log(`[ShowBox] Successfully fetched ${streams.length} streams on attempt ${attempt}.`);
@@ -689,19 +712,25 @@ builder.defineStreamHandler(async (args) => {
         
         // Xprime provider with cache integration
         xprime: async () => {
+            if (!ENABLE_XPRIME_PROVIDER) { // Check if Xprime is disabled
+                console.log('[Xprime.tv] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
             if (!shouldFetch('xprime') || !movieOrSeriesTitle || !movieOrSeriesYear) {
                 if (!shouldFetch('xprime')) console.log('[Xprime.tv] Skipping fetch: Not selected by user.');
                 else console.log('[Xprime.tv] Skipping fetch: Missing title or year data.');
                 return [];
             }
-            
+
+            const XPRIME_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
             // Try to get cached streams first
             const cachedStreams = await getStreamFromCache('xprime', tmdbTypeFromId, tmdbId, seasonNum, episodeNum);
             if (cachedStreams) {
                 console.log(`[Xprime.tv] Using ${cachedStreams.length} streams from cache.`);
                 return cachedStreams.map(stream => ({ ...stream, provider: 'Xprime.tv' }));
             }
-            
+
             // No cache or expired, fetch fresh
             try {
                 console.log(`[Xprime.tv] Fetching new streams...`);
@@ -709,22 +738,22 @@ builder.defineStreamHandler(async (args) => {
                 const useXprimeProxy = process.env.XPRIME_USE_PROXY !== 'false';
                 console.log(`[Xprime.tv] Proxy usage: ${useXprimeProxy}`);
 
-                const streams = await getXprimeStreams(movieOrSeriesTitle, movieOrSeriesYear, tmdbTypeFromId, seasonNum, episodeNum, useXprimeProxy);
-                
+                const streams = await getXprimeStreams(movieOrSeriesTitle, movieOrSeriesYear, tmdbTypeFromId, seasonNum, episodeNum, useXprimeProxy, userScraperApiKey);
+
                 if (streams && streams.length > 0) {
                     console.log(`[Xprime.tv] Successfully fetched ${streams.length} streams.`);
-                    // Save to cache
-                    await saveStreamToCache('xprime', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum);
+                    // Save to cache with custom 10-day TTL
+                    await saveStreamToCache('xprime', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum, null, null, XPRIME_CACHE_TTL_MS);
                     return streams.map(stream => ({ ...stream, provider: 'Xprime.tv' }));
                 } else {
                     console.log(`[Xprime.tv] No streams returned.`);
-                    // Save empty result
+                    // Save empty result with default (shorter) TTL for quick retry
                     await saveStreamToCache('xprime', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
                     return [];
                 }
             } catch (err) {
                 console.error(`[Xprime.tv] Error fetching streams:`, err.message);
-                // Save error status to cache
+                // Save error status to cache with default (shorter) TTL for quick retry
                 await saveStreamToCache('xprime', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
                 return [];
             }
@@ -954,6 +983,48 @@ builder.defineStreamHandler(async (args) => {
                 await saveStreamToCache('vidsrc', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
             return [];
         }
+        },
+
+        // VidZee provider with cache integration
+        vidzee: async () => {
+            if (!ENABLE_VIDZEE_PROVIDER) { // Check if VidZee is globally disabled
+                console.log('[VidZee] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
+            if (!shouldFetch('vidzee')) {
+                console.log('[VidZee] Skipping fetch: Not selected by user.');
+                return [];
+            }
+            
+            // Try to get cached streams first
+            const cachedStreams = await getStreamFromCache('vidzee', tmdbTypeFromId, tmdbId, seasonNum, episodeNum, null, userScraperApiKey);
+            if (cachedStreams) {
+                console.log(`[VidZee] Using ${cachedStreams.length} streams from cache.`);
+                return cachedStreams.map(stream => ({ ...stream, provider: 'VidZee' }));
+            }
+            
+            // No cache or expired, fetch fresh
+            try {
+                console.log(`[VidZee] Fetching new streams...`);
+                const streams = await getVidZeeStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum, userScraperApiKey);
+                
+                if (streams && streams.length > 0) {
+                    console.log(`[VidZee] Successfully fetched ${streams.length} streams.`);
+                    // Save to cache
+                    await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum, null, userScraperApiKey);
+                    return streams.map(stream => ({ ...stream, provider: 'VidZee' }));
+                } else {
+                    console.log(`[VidZee] No streams returned.`);
+                    // Save empty result
+                    await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum, null, userScraperApiKey);
+                    return [];
+                }
+            } catch (err) {
+                console.error(`[VidZee] Error fetching streams:`, err.message);
+                // Save error status to cache
+                await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum, null, userScraperApiKey);
+                return [];
+            }
         }
     };
 
@@ -969,18 +1040,20 @@ builder.defineStreamHandler(async (args) => {
             providerFetchFunctions.soapertv(),
             providerFetchFunctions.cuevana(),
             providerFetchFunctions.hianime(),
-            providerFetchFunctions.vidsrc()
+            providerFetchFunctions.vidsrc(),
+            providerFetchFunctions.vidzee()
         ]);
         
         // Process results into streamsByProvider object
         const streamsByProvider = {
             'ShowBox': shouldFetch('showbox') ? filterStreamsByQuality(providerResults[0], minQualitiesPreferences.showbox, 'ShowBox') : [],
-            'Xprime.tv': shouldFetch('xprime') ? filterStreamsByQuality(providerResults[1], minQualitiesPreferences.xprime, 'Xprime.tv') : [],
-            'HollyMovieHD': shouldFetch('hollymoviehd') ? filterStreamsByQuality(providerResults[2], minQualitiesPreferences.hollymoviehd, 'HollyMovieHD') : [],
+            'Xprime.tv': ENABLE_XPRIME_PROVIDER && shouldFetch('xprime') ? filterStreamsByQuality(providerResults[1], minQualitiesPreferences.xprime, 'Xprime.tv') : [],
+            'HollyMovieHD': ENABLE_HOLLYMOVIEHD_PROVIDER && shouldFetch('hollymoviehd') ? filterStreamsByQuality(providerResults[2], minQualitiesPreferences.hollymoviehd, 'HollyMovieHD') : [],
             'Soaper TV': shouldFetch('soapertv') ? filterStreamsByQuality(providerResults[3], minQualitiesPreferences.soapertv, 'Soaper TV') : [],
-            'Cuevana': shouldFetch('cuevana') ? filterStreamsByQuality(providerResults[4], minQualitiesPreferences.cuevana, 'Cuevana') : [],
+            'Cuevana': ENABLE_CUEVANA_PROVIDER && shouldFetch('cuevana') ? filterStreamsByQuality(providerResults[4], minQualitiesPreferences.cuevana, 'Cuevana') : [],
             'Hianime': shouldFetch('hianime') ? filterStreamsByQuality(providerResults[5], minQualitiesPreferences.hianime, 'Hianime') : [],
-            'VidSrc': shouldFetch('vidsrc') ? filterStreamsByQuality(providerResults[6], minQualitiesPreferences.vidsrc, 'VidSrc') : []
+            'VidSrc': shouldFetch('vidsrc') ? filterStreamsByQuality(providerResults[6], minQualitiesPreferences.vidsrc, 'VidSrc') : [],
+            'VidZee': ENABLE_VIDZEE_PROVIDER && shouldFetch('vidzee') ? filterStreamsByQuality(providerResults[7], minQualitiesPreferences.vidzee, 'VidZee') : []
         };
 
         // Sort streams by quality for each provider
@@ -990,7 +1063,7 @@ builder.defineStreamHandler(async (args) => {
 
         // Combine streams in the preferred provider order
         combinedRawStreams = [];
-        const providerOrder = ['ShowBox', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'Cuevana', 'Hianime', 'VidSrc'];
+        const providerOrder = ['ShowBox', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'Cuevana', 'VidSrc'];
         providerOrder.forEach(providerKey => {
             if (streamsByProvider[providerKey] && streamsByProvider[providerKey].length > 0) {
                 combinedRawStreams.push(...streamsByProvider[providerKey]);
@@ -1037,6 +1110,11 @@ builder.defineStreamHandler(async (args) => {
             providerDisplayName = 'XPRIME ⚡';
         } else if (stream.provider === 'ShowBox') {
             providerDisplayName = 'ShowBox';
+            if (!userCookie) {
+                providerDisplayName += ' (SLOW)';
+            } else {
+                providerDisplayName += ' ⚡';
+            }
         } else if (stream.provider === 'HollyMovieHD') {
             providerDisplayName = 'HollyMovieHD'; // Changed from HollyHD
         } else if (stream.provider === 'Soaper TV') {
@@ -1138,15 +1216,15 @@ builder.defineStreamHandler(async (args) => {
         if (stream.codecs && Array.isArray(stream.codecs) && stream.codecs.length > 0) {
             stream.codecs.forEach(codec => {
                 if (['DV', 'HDR10+', 'HDR', 'SDR'].includes(codec)) {
-                    titleParts.push(`✨ ${codec}`);
+                    titleParts.push(codec);
                 } else if (['Atmos', 'TrueHD', 'DTS-HD MA'].includes(codec)) {
-                    titleParts.push(`🔊 ${codec}`);
+                    titleParts.push(codec);
                 } else if (['H.265', 'H.264', 'AV1'].includes(codec)) {
-                    titleParts.push(`🎞️ ${codec}`);
+                    titleParts.push(codec);
                 } else if (['EAC3', 'AC3', 'AAC', 'Opus', 'MP3', 'DTS-HD', 'DTS'].includes(codec)) { 
-                    titleParts.push(`🎧 ${codec}`);
+                    titleParts.push(codec);
                 } else if (['10-bit', '8-bit'].includes(codec)) {
-                    titleParts.push(`⚙️ ${codec}`);
+                    titleParts.push(codec);
                 } else {
                     titleParts.push(codec); 
                 }
@@ -1154,7 +1232,15 @@ builder.defineStreamHandler(async (args) => {
         }
             
         const titleSecondLine = titleParts.join(" • ");
-        const finalTitle = titleSecondLine ? `${displayTitle}\n${titleSecondLine}` : displayTitle;
+        let finalTitle = titleSecondLine ? `${displayTitle}
+${titleSecondLine}` : displayTitle;
+
+        // Add warning for ShowBox if no user cookie is present
+        if (stream.provider === 'ShowBox' && !userCookie) {
+            const warningMessage = "⚠️ Slow? Add personal FebBox cookie in addon config for faster streaming.";
+            finalTitle += `
+${warningMessage}`;
+        }
 
         return {
             name: nameDisplay, 
@@ -1179,6 +1265,31 @@ builder.defineStreamHandler(async (args) => {
 
     // No need to clean up global variables since we're not using them anymore
     console.log(`Request for ${id} completed successfully`);
+
+    // Add Xprime configuration banner if needed
+    const needsXprimeConfig = ENABLE_XPRIME_PROVIDER && // Xprime is globally enabled
+                             shouldFetch('xprime') &&   // User wants Xprime streams for this request
+                             process.env.USE_SCRAPER_API === 'true' && // This instance typically uses ScraperAPI for Xprime
+                             !userScraperApiKey && // User did NOT provide a ScraperAPI key for THIS request
+                             !(process.env.XPRIME_USE_PROXY !== 'false' && process.env.XPRIME_PROXY_URL); // User is NOT overriding with a custom proxy
+
+    if (needsXprimeConfig) {
+        let configPageUrl = 'https://aesthetic-jodie-tapframe-ab46446c.koyeb.app/';
+
+        // Ensure the URL has a scheme. Default to https if missing.
+        if (configPageUrl && !configPageUrl.startsWith('http://') && !configPageUrl.startsWith('https://')) {
+            configPageUrl = 'https://' + configPageUrl;
+        }
+        
+        const xprimeConfigBanner = {
+            name: "Xprime: Now Available on Public Instances!", 
+            title: "Setup with an API key (or self-host). Deselect Xprime in settings to hide this.\nTap to configure (opens browser).", 
+            externalUrl: configPageUrl 
+            // No type or behaviorHints needed when using externalUrl for this purpose
+        };
+        stremioStreamObjects.push(xprimeConfigBanner);
+        console.log(`[addon.js] Added Xprime configuration banner. URL: ${configPageUrl}`);
+    }
 
     return {
         streams: stremioStreamObjects
