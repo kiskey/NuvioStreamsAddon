@@ -1,2 +1,3 @@
 Dockerfile merge=ours
 sync-upstream.yaml merge=ours
+build-docker.yaml merge=ours
