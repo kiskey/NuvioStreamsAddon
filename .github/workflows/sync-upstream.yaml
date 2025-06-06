@@ -17,6 +17,13 @@ jobs:
           # Required for `github_token` to push to your repository
           fetch-depth: 0
 
+      # --- ADD THESE LINES ---
+      - name: Configure Git user
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+      # --- END ADDITION ---
+
       - name: Add upstream remote
         run: git remote add upstream ${{ env.UPSTREAM_REPO }}
         env:
@@ -27,19 +34,10 @@ jobs:
       - name: Fetch upstream branches
         run: git fetch upstream
 
-      # *** CHANGE MADE HERE ***
       - name: Merge upstream/master into local master
-        # IMPORTANT: Based on your log, the upstream branch is 'master'.
-        # Also, your local default branch is likely 'master'.
         run: git merge --no-edit upstream/master -m "Merge upstream/master into local master" || true
-        # The `|| true` allows the merge to fail if there are conflicts,
-        # but the workflow will still complete without error.
-        # For a clean merge, you'd typically want to handle conflicts manually.
-        # However, for an automated sync, this ensures it doesn't break daily.
 
-      # *** CHANGE MADE HERE ***
       - name: Push changes to fork
-        # Push to your local 'master' branch, as indicated by the 'src refspec main does not match any' error.
         run: git push origin master
 
       - name: Prevent Dockerfile Overwrite (Manual Check/Resolution)
