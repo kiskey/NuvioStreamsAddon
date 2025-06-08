@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Nuvio Streams Addon</title>
+    <title>Nuvio Streams | Elfhosted</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap">
     <style>
         :root {
@@ -1560,10 +1560,16 @@
     </style>
 </head>
 <body>
-    <!-- New Koyeb Down Banner -->
-    <div id="koyebDownBanner" class="instance-banner" style="display: block; background: linear-gradient(135deg, #ff3a3a, #ff6432);">
-        ⚠️ The Koyeb instance is currently down due to high usage! This Vercel instance is available as a temporary solution.
-        <button id="closeKoyebDownBanner" class="instance-banner-close">×</button>
+    <!-- Banner for Official Instance -->
+    <div id="officialInstanceBanner" class="instance-banner" style="display: none; background: linear-gradient(135deg, #00c16e, #00a3ff);">
+        🚀 Welcome to the official instance, proudly hosted by <a href="https://elfhosted.com/" style="color: white; text-decoration: underline; font-weight: bold;">ElfHosted</a>! ❤️
+        <button id="closeOfficialBanner" class="instance-banner-close">×</button>
+    </div>
+
+    <!-- Banner for Unofficial Instances -->
+    <div id="unofficialInstanceBanner" class="instance-banner" style="display: none; background: linear-gradient(135deg, #ff3a3a, #ff6432);">
+        ⚠️ This is a community instance. For the official, supported instance, please visit <a href="https://nuviostreams.hayd.uk/" style="color: white; text-decoration: underline; font-weight: bold;">nuviostreams.hayd.uk</a>.
+        <button id="closeUnofficialBanner" class="instance-banner-close">×</button>
     </div>
 
     <!-- Remove the Vercel-to-Koyeb Banner -->
@@ -1578,13 +1584,70 @@
     <div class="cards-container" id="cardsContainer">
         <div class="card main-card">
             <div class="card-header">
-                <img src="https://raw.githubusercontent.com/tapframe/NuvioStreaming/main/assets/titlelogo.png" alt="Nuvio Streams Logo" class="logo">
-                <h1>Nuvio Streams Addon</h1>
+                <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 1.5rem;">
+                    <img src="https://raw.githubusercontent.com/tapframe/NuvioStreaming/main/assets/titlelogo.png" alt="Nuvio Streams Logo" class="logo" style="max-width: 180px; height: auto; margin-right: 1.5rem; margin-bottom: 0;">
+                    <img src="https://store.elfhosted.com/wp-content/uploads/2024/11/logo.svg" alt="ElfHosted Logo" style="height: 100px; margin-left: 1.5rem;">
+                </div>
+                <h1>Nuvio Streams | Elfhosted</h1>
             </div>
             <div class="card-body">
                 <!-- REMOVE URGENT MIGRATION TOOL SECTION -->
                 
                 <p class="full-width">Your gateway to high-quality streaming on Stremio. Enjoy movies and TV shows from multiple sources with our powerful addon.</p>
+                
+                <!-- ElfHosted Information -->
+                <div id="elfhostedInfoSection" class="full-width" style="background: linear-gradient(135deg, rgba(140, 82, 255, 0.15), rgba(0, 163, 255, 0.15)); border-radius: 0.6rem; padding: 1rem; margin: 1rem 0; border: 1px solid rgba(140, 82, 255, 0.3); animation: pulse 2s infinite; display: none;">
+                    <p style="font-size: 1rem; text-align: center; margin-bottom: 0.5rem; color: #fff;">
+                        <span style="font-weight: 600; color: #8c52ff;"> NEW HOSTING PARTNER </span>
+                    </p>
+                    <p style="text-align: center; margin-bottom: 0.75rem;">
+                        Hosting infrastructure donated by <a href="https://elfhosted.com/" target="_blank" style="color: #00c16e; font-weight: 600; text-decoration: none;">ElfHosted</a> ❤️, and independently maintained by <a href="https://hayd.uk" target="_blank" style="color: #00a3ff; font-weight: 600; text-decoration: none;">Hayduk</a>. See the <a href="https://stremio-addons-guide.elfhosted.com/" target="_blank" style="color: #00a3ff; font-weight: 600; text-decoration: none;">ElfHosted Stremio Addons Guide</a> for more addons, or grab <a href="https://store.elfhosted.com/product/nuviostreams/" target="_blank" style="color: #00c16e; font-weight: 600; text-decoration: none;">your own isolated, private instance</a> (<i>directly supports your developer!</i>)
+                    </p>
+                    
+                    <!-- Toggle button for private instance features -->
+                    <div style="text-align: center; margin-bottom: 0.5rem;">
+                        <button id="togglePrivateFeatures" class="toggle-btn" style="display: inline-flex; align-items: center; background-color: rgba(140, 82, 255, 0.2); border-radius: 0.4rem; padding: 0.4rem 0.8rem; border: 1px solid rgba(140, 82, 255, 0.4); cursor: pointer;">
+                            <span class="toggle-icon" style="margin-right: 0.5rem; transition: transform 0.3s ease;">▼</span>
+                            <span style="font-weight: 500; color: #8c52ff;">View Private Instance Features</span>
+                        </button>
+                    </div>
+                    
+                    <!-- Collapsible features section -->
+                    <div id="privateInstanceFeatures" class="cookie-config collapsed" style="background: rgba(15, 15, 15, 0.5); margin-top: 0.5rem;">
+                        <div style="padding: 0.75rem;">
+                            <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #fff; text-align: center;">ElfHosted Private Instance Information</h3>
+                            
+                            <ul style="list-style-type: none; padding: 0; margin: 0;">
+                                <li style="display: flex; align-items: flex-start; margin-bottom: 0.6rem;">
+                                    <span style="color: #00c16e; margin-right: 0.5rem;">•</span>
+                                    <span style="font-size: 0.85rem; color: #fff;">Private instance with separate rate-limits</span>
+                                </li>
+                                <li style="display: flex; align-items: flex-start; margin-bottom: 0.6rem;">
+                                    <span style="color: #00c16e; margin-right: 0.5rem;">•</span>
+                                    <span style="font-size: 0.85rem; color: #fff;">Includes <strong>Cuevana</strong> provider with LATAM content</span>
+                                </li>
+                                <li style="display: flex; align-items: flex-start; margin-bottom: 0.6rem;">
+                                    <span style="color: #00c16e; margin-right: 0.5rem;">•</span>
+                                    <span style="font-size: 0.85rem; color: #fff;">Additional regional providers in development</span>
+                                </li>
+                                <li style="display: flex; align-items: flex-start; margin-bottom: 0;">
+                                    <span style="color: #00c16e; margin-right: 0.5rem;">•</span>
+                                    <span style="font-size: 0.85rem; color: #fff;">33% of hosting fees go to addon development</span>
+                                </li>
+                            </ul>
+                            
+                            <div style="margin-top: 1rem; background: rgba(10, 10, 10, 0.4); border-radius: 0.5rem; padding: 0.75rem; border: 1px dashed rgba(140, 82, 255, 0.3);">
+                                <p style="font-size: 0.85rem; color: #fff; margin: 0; text-align: center;">
+                                    Hosted by ElfHosted with free trial available
+                                </p>
+                            </div>
+                            
+                            <div style="text-align: center; margin-top: 1rem;">
+                                <a href="https://store.elfhosted.com/product/nuvio-streams/" target="_blank" style="display: inline-block; padding: 0.5rem 1rem; background: rgba(140, 82, 255, 0.2); color: #8c52ff; font-weight: 500; font-size: 0.85rem; border-radius: 0.5rem; text-decoration: none; border: 1px solid rgba(140, 82, 255, 0.4);">View on ElfHosted</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 
                 <button class="more-addons-btn full-width" id="moreAddonsBtn">
                     More Addons by TapFrame
@@ -1626,7 +1689,7 @@
                     <div class="provider-item">
                         <div class="provider-icon cuevana-icon">🇨</div> <!-- Placeholder icon, can be updated -->
                         <div class="provider-name">Cuevana</div>
-                        <span class="provider-detail" style="color: #ff8c00;">LATAM Provider (Self-hosted only)</span>
+                        <span class="provider-detail" style="color: #ff8c00;">LATAM Provider (ElfHosted Private Instance Exclusive)</span>
                     </div>
                     <div class="provider-item">
                         <div class="provider-icon vidsrc-icon">🎬</div>
@@ -1687,7 +1750,7 @@
                         <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
                                 <input type="checkbox" id="providerCuevana" name="providerSelect" value="cuevana" disabled style="margin-right: 0.5rem; accent-color: var(--primary); opacity: 0.5;">
-                                <label for="providerCuevana" style="font-size: 0.9rem; opacity: 0.5;">Cuevana</label>
+                                <label for="providerCuevana" style="font-size: 0.9rem; opacity: 0.5;">Cuevana (ElfHosted Private Instance Exclusive)</label>
                             </div>
                             <select id="qualityCuevana" name="providerQuality" data-provider="cuevana" class="provider-sort-select" disabled>
                                 <option value="all" selected>All Qualities</option>
@@ -1852,7 +1915,7 @@
                 </div>
             </div>
             <div class="card-footer">
-                <span class="footer-text">Nuvio Streams Addon • Seamless Streaming, Elevated</span>
+                <span class="footer-text">Nuvio Streams | Elfhosted • Seamless Streaming, Elevated</span>
                 <div class="footer-text">
                     Developed by <a href="https://github.com/tapframe" target="_blank" class="github-link">TapFrame</a> 
                 </div>
@@ -3021,35 +3084,89 @@
 
     <!-- Add at the end of the file, before the closing body tag -->
     <script>
-        // Instance banner logic - show Koyeb down banner
+        // Handles display of banners and ElfHosted info based on hostname
         (function() {
-            const koyebDownBanner = document.getElementById('koyebDownBanner');
-            const closeKoyebDownBanner = document.getElementById('closeKoyebDownBanner');
+            const currentHostname = window.location.hostname;
+            const officialHostnames = ['nuviostreams.hayd.uk', 'localhost', '127.0.0.1'];
+
+            const elfhostedInfoSection = document.getElementById('elfhostedInfoSection');
             
-            // Show Koyeb down banner by default
-            if (koyebDownBanner && !localStorage.getItem('koyebDownBannerDismissed')) {
-                koyebDownBanner.style.display = 'block';
-                document.body.classList.add('has-instance-banner');
+            const officialInstanceBanner = document.getElementById('officialInstanceBanner');
+            const unofficialInstanceBanner = document.getElementById('unofficialInstanceBanner');
+            
+            const closeOfficialBanner = document.getElementById('closeOfficialBanner');
+            const closeUnofficialBanner = document.getElementById('closeUnofficialBanner');
+
+            if (officialHostnames.includes(currentHostname)) {
+                // This is an official instance
+                if (elfhostedInfoSection) {
+                    elfhostedInfoSection.style.display = 'block';
+                }
+                if (officialInstanceBanner && !localStorage.getItem('officialBannerDismissed')) {
+                    officialInstanceBanner.style.display = 'block';
+                    document.body.classList.add('has-instance-banner');
+                }
+            } else {
+                // This is a Vercel, Koyeb, or other community instance
+                if (elfhostedInfoSection) {
+                    elfhostedInfoSection.style.display = 'none';
+                }
+                if (unofficialInstanceBanner && !localStorage.getItem('unofficialBannerDismissed')) {
+                    unofficialInstanceBanner.style.display = 'block';
+                    document.body.classList.add('has-instance-banner');
+                }
             }
             
-            // Handle close button for Koyeb down banner
-            if (closeKoyebDownBanner) {
-                closeKoyebDownBanner.addEventListener('click', () => {
-                    koyebDownBanner.style.display = 'none';
+            // Handlers for closing banners
+            if (closeOfficialBanner) {
+                closeOfficialBanner.addEventListener('click', () => {
+                    if (officialInstanceBanner) officialInstanceBanner.style.display = 'none';
                     document.body.classList.remove('has-instance-banner');
-                    // Remember dismiss for 24 hours
-                    localStorage.setItem('koyebDownBannerDismissed', 'true');
-                    setTimeout(() => {
-                        localStorage.removeItem('koyebDownBannerDismissed');
-                    }, 24 * 60 * 60 * 1000);
+                    localStorage.setItem('officialBannerDismissed', 'true');
+                     setTimeout(() => {
+                        localStorage.removeItem('officialBannerDismissed');
+                    }, 24 * 60 * 60 * 1000); // Expires in 24 hours
                 });
             }
             
-            // Hide the old Vercel-to-Koyeb banner
-            const instanceBanner = document.getElementById('instanceBanner');
-            if (instanceBanner) {
-                instanceBanner.style.display = 'none';
+            if (closeUnofficialBanner) {
+                closeUnofficialBanner.addEventListener('click', () => {
+                    if (unofficialInstanceBanner) unofficialInstanceBanner.style.display = 'none';
+                    document.body.classList.remove('has-instance-banner');
+                     localStorage.setItem('unofficialBannerDismissed', 'true');
+                     setTimeout(() => {
+                        localStorage.removeItem('unofficialBannerDismissed');
+                    }, 24 * 60 * 60 * 1000); // Expires in 24 hours
+                });
             }
+
+            // Also ensure the old vercel-to-koyeb banner is hidden
+            const vercelToKoyebBanner = document.getElementById('instanceBanner');
+            if (vercelToKoyebBanner) {
+                vercelToKoyebBanner.style.display = 'none';
+            }
+            
+            // Add toggle functionality for the private instance features section
+            const togglePrivateFeaturesBtn = document.getElementById('togglePrivateFeatures');
+            const privateInstanceFeatures = document.getElementById('privateInstanceFeatures');
+            
+            if (togglePrivateFeaturesBtn && privateInstanceFeatures) {
+                togglePrivateFeaturesBtn.addEventListener('click', () => {
+                    const isCollapsed = privateInstanceFeatures.classList.toggle('collapsed');
+                    const toggleIcon = togglePrivateFeaturesBtn.querySelector('.toggle-icon');
+                    
+                    if (toggleIcon) {
+                        if (isCollapsed) {
+                            toggleIcon.textContent = '▼';
+                            togglePrivateFeaturesBtn.querySelector('span:last-child').textContent = 'View Private Instance Features';
+                        } else {
+                            toggleIcon.textContent = '▲';
+                            togglePrivateFeaturesBtn.querySelector('span:last-child').textContent = 'Hide Private Instance Features';
+                        }
+                    }
+                });
+            }
+
         })();
     </script>
     

@@ -1,8 +1,24 @@
 #!/usr/bin/env node
 const cheerio = require('cheerio');
 // --- Constants ---
+const VIDSRC_PROXY_URL = process.env.VIDSRC_PROXY_URL;
 let BASEDOM = "https://cloudnestra.com"; // This can be updated by serversLoad
 const SOURCE_URL = "https://vidsrc.xyz/embed";
+// --- Helper: Conditional Proxied Fetch ---
+// This function wraps the native fetch. If VIDSRC_PROXY_URL is set in the environment,
+// it routes requests through the proxy. Otherwise, it makes a direct request.
+async function fetchWrapper(url, options) {
+    if (VIDSRC_PROXY_URL) {
+        const proxiedUrl = `${VIDSRC_PROXY_URL}${encodeURIComponent(url)}`;
+        console.log(`[VidSrc Proxy] Fetching: ${url} via proxy`);
+        // Note: The proxy will handle the actual fetching, so we send the request to the proxy URL.
+        // We pass the original headers in the options, the proxy should forward them.
+        return fetch(proxiedUrl, options);
+    }
+    // If no proxy is set, fetch directly.
+    console.log(`[VidSrc Direct] Fetching: ${url}`);
+    return fetch(url, options);
+}
 // --- Helper Functions (copied and adapted from src/extractor.ts) ---
 async function serversLoad(html) {
     const $ = cheerio.load(html);
@@ -91,7 +107,7 @@ async function parseMasterM3U8(m3u8Content, masterM3U8Url) {
 async function PRORCPhandler(prorcp) {
     try {
         const prorcpUrl = `${BASEDOM}/prorcp/${prorcp}`;
-        const prorcpFetch = await fetch(prorcpUrl, {
+        const prorcpFetch = await fetchWrapper(prorcpUrl, {
             headers: {
                 "accept": "*/*", "accept-language": "en-US,en;q=0.9", "priority": "u=1",
                 "sec-ch-ua": "\"Chromium\";v=\"128\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"128\"",
@@ -110,7 +126,7 @@ async function PRORCPhandler(prorcp) {
         const match = regex.exec(prorcpResponse);
         if (match && match[1]) {
             const masterM3U8Url = match[1];
-            const m3u8FileFetch = await fetch(masterM3U8Url, {
+            const m3u8FileFetch = await fetchWrapper(masterM3U8Url, {
                 headers: { "Referer": prorcpUrl, "Accept": "*/*" },
                 timeout: 10000
             });
@@ -133,7 +149,7 @@ async function SRCRCPhandler(srcrcpPath, refererForSrcrcp) {
     try {
         const srcrcpUrl = BASEDOM + srcrcpPath;
         console.log(`[VidSrc - SRCRCP] Fetching: ${srcrcpUrl} (Referer: ${refererForSrcrcp})`);
-        const response = await fetch(srcrcpUrl, {
+        const response = await fetchWrapper(srcrcpUrl, {
             headers: {
                 "accept": "*/*",
                 "accept-language": "en-US,en;q=0.9",
@@ -163,7 +179,7 @@ async function SRCRCPhandler(srcrcpPath, refererForSrcrcp) {
         if (fileMatch && fileMatch[1]) {
             const masterM3U8Url = fileMatch[1];
             console.log(`[VidSrc - SRCRCP] Found M3U8 URL (via fileMatch): ${masterM3U8Url}`);
-            const m3u8FileFetch = await fetch(masterM3U8Url, {
+            const m3u8FileFetch = await fetchWrapper(masterM3U8Url, {
                 headers: { "Referer": srcrcpUrl, "Accept": "*/*" },
                 timeout: 10000
             });
@@ -232,7 +248,7 @@ async function SRCRCPhandler(srcrcpPath, refererForSrcrcp) {
                  console.log(`[VidSrc - SRCRCP] First M3U8 source from script: ${m3u8Source.url}`);
                  // Ensure URL is absolute
                  const absoluteM3u8Url = m3u8Source.url.startsWith('http') ? m3u8Source.url : new URL(m3u8Source.url, srcrcpUrl).href;
-                 const m3u8FileFetch = await fetch(absoluteM3u8Url, {
+                 const m3u8FileFetch = await fetchWrapper(absoluteM3u8Url, {
                     headers: { "Referer": srcrcpUrl, "Accept": "*/*" },
                     timeout: 10000
                  });
@@ -281,7 +297,7 @@ function getUrl(id, type) {
 }
 async function getStreamContent(id, type) {
     const url = getUrl(id, type);
-    const embedRes = await fetch(url, { headers: { "Referer": SOURCE_URL } });
+    const embedRes = await fetchWrapper(url, { headers: { "Referer": SOURCE_URL } });
     if (!embedRes.ok) {
         console.error(`Failed to fetch embed page ${url}: ${embedRes.status}`);
         return [];
@@ -296,7 +312,7 @@ async function getStreamContent(id, type) {
 
         try {
             const rcpUrl = `${BASEDOM}/rcp/${server.dataHash}`;
-            const rcpRes = await fetch(rcpUrl, {
+            const rcpRes = await fetchWrapper(rcpUrl, {
                 headers: { 'Sec-Fetch-Dest': 'iframe', "Referer": url }
             });
             if (!rcpRes.ok) {
