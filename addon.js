@@ -1274,7 +1274,7 @@ ${warningMessage}`;
                              !(process.env.XPRIME_USE_PROXY !== 'false' && process.env.XPRIME_PROXY_URL); // User is NOT overriding with a custom proxy
 
     if (needsXprimeConfig) {
-        let configPageUrl = 'https://aesthetic-jodie-tapframe-ab46446c.koyeb.app/';
+        let configPageUrl = 'https://nuviostreams.hayd.uk/';
 
         // Ensure the URL has a scheme. Default to https if missing.
         if (configPageUrl && !configPageUrl.startsWith('http://') && !configPageUrl.startsWith('https://')) {
