@@ -1664,7 +1664,7 @@
                     <div class="provider-item">
                         <div class="provider-icon hianime-icon">🍥</div>
                         <div class="provider-name">Hianime</div>
-                        <span class="provider-detail">Anime (Dub/Sub)</span>
+                        <span class="provider-detail" style="color: #ff3a3a;">Anime (Dub/Sub) - Offline</span>
                     </div>
                     <div class="provider-item">
                         <div class="provider-icon xprime-icon">⚡</div>
@@ -1797,10 +1797,10 @@
                         </div>
                         <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
-                                <input type="checkbox" id="providerHianime" name="providerSelect" value="hianime" checked style="margin-right: 0.5rem; accent-color: var(--primary);">
-                                <label for="providerHianime" style="font-size: 0.9rem;">Hianime</label>
+                                <input type="checkbox" id="providerHianime" name="providerSelect" value="hianime" disabled style="margin-right: 0.5rem; accent-color: var(--primary); opacity: 0.5;">
+                                <label for="providerHianime" style="font-size: 0.9rem; opacity: 0.5;">Hianime (Offline)</label>
                             </div>
-                            <select id="qualityHianime" name="providerQuality" data-provider="hianime" class="provider-sort-select">
+                            <select id="qualityHianime" name="providerQuality" data-provider="hianime" class="provider-sort-select" disabled>
                                 <option value="all" selected>All Qualities</option>
                                 <option value="480p">480p & Up</option>
                                 <option value="720p">720p & Up</option>
