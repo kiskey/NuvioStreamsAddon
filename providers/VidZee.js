@@ -53,14 +53,14 @@ const getVidZeeStreams = async (tmdbId, mediaType, seasonNum, episodeNum, scrape
     let headers = {
         'Referer': 'https://core.vidzee.wtf/' // Default for proxy method
     };
-    let timeout = 15000; // Default timeout
+    let timeout = 7000; // Reduced timeout
 
     if (scraperApiKey) {
         console.log('[VidZee] Using ScraperAPI (key provided).');
         finalApiUrl = `https://api.scraperapi.com/?api_key=${scraperApiKey}&url=${encodeURIComponent(targetApiUrl)}`;
         // For ScraperAPI, we don't set a Referer on our request to them.
         headers = {}; 
-        timeout = 25000; // Longer timeout for ScraperAPI
+        timeout = 15000; // Longer timeout for ScraperAPI, but reduced from 25s
     } else {
         const proxyBaseUrl = process.env.VIDZEE_PROXY_URL || process.env.SHOWBOX_PROXY_URL_VALUE;
         if (proxyBaseUrl) {

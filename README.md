@@ -74,7 +74,7 @@ Nuvio Streams is a powerful Stremio addon that provides direct HTTP streaming li
 
 ### Key Features
 
-* **🌐 Multiple Providers** - ShowBox, SoaperTV, Hianime, VidSrc, Xprime.tv, Cuevana
+* **🌐 Multiple Providers** - ShowBox, SoaperTV, VidSrc, Cuevana
 * **⚡ Personal Cookie Support** - Get your own quota and access to 4K/HDR content
 * **🎯 Quality Filtering** - Set minimum quality requirements
 * **🔒 No P2P/Torrents** - Only direct HTTP streams
@@ -96,7 +96,7 @@ Nuvio Streams is a powerful Stremio addon that provides direct HTTP streaming li
 
 **🌍 Current Public Instance:** [https://nuviostreams.hayd.uk](https://nuviostreams.hayd.uk)
 
-* ✅ Includes ShowBox, SoaperTV, and Hianime providers
+* ✅ Includes ShowBox and SoaperTV providers
 * ❌ Cuevana isn't available on public instances 
 * 💡 For the most reliable experience, consider self-hosting your own instance
 
@@ -105,90 +105,9 @@ Nuvio Streams is a powerful Stremio addon that provides direct HTTP streaming li
 <!-- GETTING STARTED -->
 ## Getting Started
 
-Self-hosting provides the best experience with full provider access and personalized performance.
+Self-hosting provides the best experience with full provider access and personalized performance. For detailed setup and configuration instructions, please refer to our documentation.
 
-### Prerequisites
-
-* [Node.js](https://nodejs.org/) (LTS version recommended)
-* npm (comes with Node.js) or yarn
-* Basic command line familiarity
-
-### Installation
-
-1. **Clone the repository**
-   ```sh
-git clone https://github.com/tapframe/NuvioStreamsAddon.git
-cd NuvioStreamsAddon 
-```
-
-2. **Install dependencies**
-   ```sh
-npm install
-   ```
-
-3. **Create configuration file**
-   ```sh
-cp .env.example .env
-```
-
-4. **Configure your settings** (edit `.env` file)
-   ```env
-   # Required: Get from https://www.themoviedb.org/settings/api
-TMDB_API_KEY=your_tmdb_api_key_here
-
-   # Provider settings
-ENABLE_CUEVANA_PROVIDER=false
-ENABLE_HOLLYMOVIEHD_PROVIDER=true
-ENABLE_XPRIME_PROVIDER=true
-
-   # Performance settings (production)
-DISABLE_CACHE=false
-   DISABLE_STREAM_CACHE=false
-   ```
-
-5. **Start the addon**
-   ```sh
-npm start
-   ```
-
-Your addon will run on `http://localhost:7000` by default.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-### Configuration
-
-#### ShowBox Cookie Setup (Recommended)
-
-For optimal ShowBox performance:
-
-**Option A: Using cookies.txt file**
-1. Create `cookies.txt` in project root
-2. Add one ShowBox cookie per line
-3. Add `cookies.txt` to `.gitignore`
-
-**Option B: Web Configuration**
-1. Visit your addon URL in browser
-2. Use the configuration page to set cookies
-
-#### Hianime Service Setup
-
-For anime content:
-
-1. **Navigate to Hianime directory**
-   ```sh
-   cd providers/hianime
-   ```
-
-2. **Install and start service**
-   ```sh
-   npm install
-   npm start
-   ```
-   
-3. **Configure main addon**
-   ```env
-   HIANIME_SERVER=http://localhost:8082/fetch-hianime
-   ```
+**[➡️ View the Self-Hosting Guide](https://github.com/tapframe/NuvioStreamsAddon/blob/master/DOCUMENTATION.md)**
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -221,6 +140,8 @@ For anime content:
 
 ### Xprime.tv with ScraperAPI
 
+**Note:** Xprime.tv is currently offline due to upstream security changes. This section is kept for archival purposes.
+
 1. Get free API key from [ScraperAPI.com](https://www.scraperapi.com/)
 2. Enter key in addon configuration
 3. Enable Xprime provider
@@ -230,6 +151,8 @@ For anime content:
 Available only for self-hosted instances. Requires unique IP for optimal functionality.
 
 ### Hianime Operation
+
+**Note:** Hianime is currently offline due to upstream security changes. This section is kept for archival purposes.
 
 Two-step process:
 1. **Main Addon** - Gathers TMDB information

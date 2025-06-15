@@ -448,6 +448,33 @@ const saveStreamToCache = async (provider, type, id, streams, status = 'ok', sea
 
 // Define stream handler for movies
 builder.defineStreamHandler(async (args) => {
+    const requestStartTime = Date.now(); // Start total request timer
+    const providerTimings = {}; // Object to store timings
+
+    const formatDuration = (ms) => {
+        if (ms < 1000) {
+            return `${ms}ms`;
+        }
+        const totalSeconds = ms / 1000;
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        
+        let str = "";
+        if (minutes > 0) {
+            str += `${minutes}m `;
+        }
+        
+        if (seconds > 0 || minutes === 0) {
+            let secStr = seconds.toFixed(2);
+            if (secStr.endsWith('.00')) {
+                secStr = secStr.substring(0, secStr.length - 3);
+            }
+            str += `${secStr}s`;
+        }
+        
+        return str.trim();
+    };
+
     const { type, id, config: sdkConfig } = args;
 
     // Read config from global set by server.js middleware
@@ -640,6 +667,15 @@ builder.defineStreamHandler(async (args) => {
     const shouldFetch = (providerId) => {
         if (!selectedProvidersArray) return true; // If no selection, fetch all
         return selectedProvidersArray.includes(providerId.toLowerCase());
+    };
+
+    // Helper for timing provider fetches
+    const timeProvider = async (providerName, fetchPromise) => {
+        const startTime = Date.now();
+        const result = await fetchPromise;
+        const endTime = Date.now();
+        providerTimings[providerName] = formatDuration(endTime - startTime);
+        return result;
     };
 
     // --- NEW: Asynchronous provider fetching with caching ---
@@ -1032,16 +1068,16 @@ builder.defineStreamHandler(async (args) => {
     console.log('Running parallel provider fetches with caching...');
     
     try {
-        // Execute all provider functions in parallel
+        // Execute all provider functions in parallel and time them
         const providerResults = await Promise.all([
-            providerFetchFunctions.showbox(),
-            providerFetchFunctions.xprime(),
-            providerFetchFunctions.hollymoviehd(),
-            providerFetchFunctions.soapertv(),
-            providerFetchFunctions.cuevana(),
-            providerFetchFunctions.hianime(),
-            providerFetchFunctions.vidsrc(),
-            providerFetchFunctions.vidzee()
+            timeProvider('ShowBox', providerFetchFunctions.showbox()),
+            timeProvider('Xprime.tv', providerFetchFunctions.xprime()),
+            timeProvider('HollyMovieHD', providerFetchFunctions.hollymoviehd()),
+            timeProvider('Soaper TV', providerFetchFunctions.soapertv()),
+            timeProvider('Cuevana', providerFetchFunctions.cuevana()),
+            timeProvider('Hianime', providerFetchFunctions.hianime()),
+            timeProvider('VidSrc', providerFetchFunctions.vidsrc()),
+            timeProvider('VidZee', providerFetchFunctions.vidzee())
         ]);
         
         // Process results into streamsByProvider object
@@ -1264,32 +1300,15 @@ ${warningMessage}`;
     console.log("--- END Stremio Stream Objects to be sent ---");
 
     // No need to clean up global variables since we're not using them anymore
+    const requestEndTime = Date.now();
+    const totalRequestTime = requestEndTime - requestStartTime;
     console.log(`Request for ${id} completed successfully`);
 
-    // Add Xprime configuration banner if needed
-    const needsXprimeConfig = ENABLE_XPRIME_PROVIDER && // Xprime is globally enabled
-                             shouldFetch('xprime') &&   // User wants Xprime streams for this request
-                             process.env.USE_SCRAPER_API === 'true' && // This instance typically uses ScraperAPI for Xprime
-                             !userScraperApiKey && // User did NOT provide a ScraperAPI key for THIS request
-                             !(process.env.XPRIME_USE_PROXY !== 'false' && process.env.XPRIME_PROXY_URL); // User is NOT overriding with a custom proxy
-
-    if (needsXprimeConfig) {
-        let configPageUrl = 'https://nuviostreams.hayd.uk/';
-
-        // Ensure the URL has a scheme. Default to https if missing.
-        if (configPageUrl && !configPageUrl.startsWith('http://') && !configPageUrl.startsWith('https://')) {
-            configPageUrl = 'https://' + configPageUrl;
-        }
-        
-        const xprimeConfigBanner = {
-            name: "Xprime: Now Available on Public Instances!", 
-            title: "Setup with an API key (or self-host). Deselect Xprime in settings to hide this.\nTap to configure (opens browser).", 
-            externalUrl: configPageUrl 
-            // No type or behaviorHints needed when using externalUrl for this purpose
-        };
-        stremioStreamObjects.push(xprimeConfigBanner);
-        console.log(`[addon.js] Added Xprime configuration banner. URL: ${configPageUrl}`);
-    }
+    // --- Timings Summary ---
+    console.log("--- Request Timings Summary ---");
+    console.log(JSON.stringify(providerTimings, null, 2));
+    console.log(`Total Request Time: ${formatDuration(totalRequestTime)}`);
+    console.log("-------------------------------");
 
     return {
         streams: stremioStreamObjects

@@ -1662,16 +1662,6 @@
                         <span class="provider-detail">May contain 4K/DV/HDR</span>
                     </div>
                     <div class="provider-item">
-                        <div class="provider-icon hianime-icon">🍥</div>
-                        <div class="provider-name">Hianime</div>
-                        <span class="provider-detail" style="color: #ff3a3a;">Anime (Dub/Sub) - Offline</span>
-                    </div>
-                    <div class="provider-item">
-                        <div class="provider-icon xprime-icon">⚡</div>
-                        <div class="provider-name">Xprime.tv</div>
-                        <span class="provider-detail" style="color: #ff8c00;">Public (w/ API Key) / Self-host</span>
-                    </div>
-                    <div class="provider-item">
                         <div class="provider-icon hollymovie-icon">🎬</div>
                         <div class="provider-name">HollyMovieHD</div>
                         <span class="provider-detail">Multiple Qualities</span>
@@ -1679,11 +1669,6 @@
                     <div class="provider-item">
                         <div class="provider-icon soapertv-icon">🧼</div> 
                         <div class="provider-name">Soaper TV</div>
-                        <span class="provider-detail">Auto Quality</span>
-                    </div>
-                    <div class="provider-item">
-                        <div class="provider-icon vidzee-icon">📺</div>
-                        <div class="provider-name">VidZee</div>
                         <span class="provider-detail">Auto Quality</span>
                     </div>
                     <div class="provider-item">
@@ -1695,6 +1680,23 @@
                         <div class="provider-icon vidsrc-icon">🎬</div>
                         <div class="provider-name">VidSrc</div>
                         <span class="provider-detail">Auto Quality</span>
+                    </div>
+
+                    <h2 style="margin-top: 1.25rem; color: #ff6b6b;">Offline Providers</h2>
+                    <div class="provider-item">
+                        <div class="provider-icon hianime-icon">🍥</div>
+                        <div class="provider-name">Hianime</div>
+                        <span class="provider-detail" style="color: #ff3a3a;">Anime (Dub/Sub) - Offline</span>
+                    </div>
+                    <div class="provider-item">
+                        <div class="provider-icon xprime-icon">⚡</div>
+                        <div class="provider-name">Xprime.tv</div>
+                        <span class="provider-detail" style="color: #ff3a3a;">Offline</span>
+                    </div>
+                    <div class="provider-item">
+                        <div class="provider-icon vidzee-icon">📺</div>
+                        <div class="provider-name">VidZee</div>
+                        <span class="provider-detail" style="color: #ff3a3a;">Offline</span>
                     </div>
                 </div>
                 
@@ -1735,19 +1737,19 @@
                                 <option value="1080p">1080p & Up</option>
                             </select>
                         </div>
-                        <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
+                        <div class="provider-checkbox-item" style="display: none; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
-                                <input type="checkbox" id="providerXprime" name="providerSelect" value="xprime" checked style="margin-right: 0.5rem; accent-color: var(--primary);">
-                                <label for="providerXprime" style="font-size: 0.9rem;">Xprime.tv</label>
+                                <input type="checkbox" id="providerXprime" name="providerSelect" value="xprime" disabled style="margin-right: 0.5rem; accent-color: var(--primary); opacity: 0.5;">
+                                <label for="providerXprime" style="font-size: 0.9rem; opacity: 0.5;">Xprime.tv (Offline)</label>
                             </div>
-                            <select id="qualityXprime" name="providerQuality" data-provider="xprime" class="provider-sort-select">
+                            <select id="qualityXprime" name="providerQuality" data-provider="xprime" class="provider-sort-select" disabled>
                                 <option value="all" selected>All Qualities</option>
                                 <option value="480p">480p & Up</option>
                                 <option value="720p">720p & Up</option>
                                 <option value="1080p">1080p & Up</option>
                             </select>
                         </div>
-                        <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
+                        <div class="provider-checkbox-item" style="display: none; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
                                 <input type="checkbox" id="providerCuevana" name="providerSelect" value="cuevana" disabled style="margin-right: 0.5rem; accent-color: var(--primary); opacity: 0.5;">
                                 <label for="providerCuevana" style="font-size: 0.9rem; opacity: 0.5;">Cuevana (ElfHosted Private Instance Exclusive)</label>
@@ -1783,19 +1785,19 @@
                                 <option value="1080p">1080p & Up</option>
                             </select>
                         </div>
-                        <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
+                        <div class="provider-checkbox-item" style="display: none; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
-                                <input type="checkbox" id="providerVidzee" name="providerSelect" value="vidzee" checked style="margin-right: 0.5rem; accent-color: var(--primary);">
-                                <label for="providerVidzee" style="font-size: 0.9rem;">VidZee</label>
+                                <input type="checkbox" id="providerVidzee" name="providerSelect" value="vidzee" disabled style="margin-right: 0.5rem; accent-color: var(--primary); opacity: 0.5;">
+                                <label for="providerVidzee" style="font-size: 0.9rem; opacity: 0.5;">VidZee (Offline)</label>
                             </div>
-                             <select id="qualityVidzee" name="providerQuality" data-provider="vidzee" class="provider-sort-select">
+                             <select id="qualityVidzee" name="providerQuality" data-provider="vidzee" class="provider-sort-select" disabled>
                                 <option value="all" selected>All Qualities</option>
                                 <option value="480p">480p & Up</option>
                                 <option value="720p">720p & Up</option>
                                 <option value="1080p">1080p & Up</option>
                             </select>
                         </div>
-                        <div class="provider-checkbox-item" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
+                        <div class="provider-checkbox-item" style="display: none; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
                                 <input type="checkbox" id="providerHianime" name="providerSelect" value="hianime" disabled style="margin-right: 0.5rem; accent-color: var(--primary); opacity: 0.5;">
                                 <label for="providerHianime" style="font-size: 0.9rem; opacity: 0.5;">Hianime (Offline)</label>
@@ -1829,7 +1831,7 @@
                 <!-- END NEW: Provider Selection Section -->
 
                 <!-- ScraperAPI Key Input - MOVED OUTSIDE of cookie-config -->
-                <div class="scraper-api-key-container full-width" style="margin-top: 1.5rem;">
+                <div class="scraper-api-key-container full-width" style="margin-top: 1.5rem; display: none;">
                     <div style="background-color: rgba(15, 15, 15, 0.7); border-radius: 0.6rem; padding: 1rem; border: 1px solid var(--border);">
                         <label for="scraperApiKeyInput" style="display: block; font-size: 0.9rem; font-weight: 500; margin-bottom: 0.25rem;">ScraperAPI Key (Optional for Xprime):</label>
                         <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
