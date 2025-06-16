@@ -8,6 +8,8 @@ const Redis = require('ioredis');
 // Add Redis client if enabled
 const USE_REDIS_CACHE = process.env.USE_REDIS_CACHE === 'true';
 let redis = null;
+let redisKeepAliveInterval = null; // Variable to manage the keep-alive interval
+
 if (USE_REDIS_CACHE) {
     try {
         console.log(`[Redis Cache] Initializing Redis in addon.js. REDIS_URL from env: ${process.env.REDIS_URL ? 'exists and has value' : 'MISSING or empty'}`);
@@ -27,6 +29,7 @@ if (USE_REDIS_CACHE) {
                 }
                 return false;
             },
+            tls: {},
             enableOfflineQueue: true,
             enableReadyCheck: true,
             autoResubscribe: true,
@@ -36,10 +39,32 @@ if (USE_REDIS_CACHE) {
         
         redis.on('error', (err) => {
             console.error(`[Redis Cache] Connection error: ${err.message}`);
+            // --- BEGIN: Clear Keep-Alive on Error ---
+            if (redisKeepAliveInterval) {
+                clearInterval(redisKeepAliveInterval);
+                redisKeepAliveInterval = null;
+            }
+            // --- END: Clear Keep-Alive on Error ---
         });
         
         redis.on('connect', () => {
             console.log('[Redis Cache] Successfully connected to Upstash Redis');
+
+            // --- BEGIN: Redis Keep-Alive ---
+            if (redisKeepAliveInterval) {
+                clearInterval(redisKeepAliveInterval);
+            }
+
+            redisKeepAliveInterval = setInterval(() => {
+                if (redis && redis.status === 'ready') {
+                    redis.ping((err) => {
+                        if (err) {
+                            console.error('[Redis Cache Keep-Alive] Ping failed:', err.message);
+                        }
+                    });
+                }
+            }, 4 * 60 * 1000); // 4 minutes
+            // --- END: Redis Keep-Alive ---
         });
         
         console.log('[Redis Cache] Upstash Redis client initialized');
@@ -1033,7 +1058,7 @@ builder.defineStreamHandler(async (args) => {
             }
             
             // Try to get cached streams first
-            const cachedStreams = await getStreamFromCache('vidzee', tmdbTypeFromId, tmdbId, seasonNum, episodeNum, null, userScraperApiKey);
+            const cachedStreams = await getStreamFromCache('vidzee', tmdbTypeFromId, tmdbId, seasonNum, episodeNum, null, null);
             if (cachedStreams) {
                 console.log(`[VidZee] Using ${cachedStreams.length} streams from cache.`);
                 return cachedStreams.map(stream => ({ ...stream, provider: 'VidZee' }));
@@ -1042,23 +1067,23 @@ builder.defineStreamHandler(async (args) => {
             // No cache or expired, fetch fresh
             try {
                 console.log(`[VidZee] Fetching new streams...`);
-                const streams = await getVidZeeStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum, userScraperApiKey);
+                const streams = await getVidZeeStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
                 
                 if (streams && streams.length > 0) {
                     console.log(`[VidZee] Successfully fetched ${streams.length} streams.`);
                     // Save to cache
-                    await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum, null, userScraperApiKey);
+                    await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum, null, null);
                     return streams.map(stream => ({ ...stream, provider: 'VidZee' }));
                 } else {
                     console.log(`[VidZee] No streams returned.`);
                     // Save empty result
-                    await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum, null, userScraperApiKey);
+                    await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum, null, null);
                     return [];
                 }
             } catch (err) {
                 console.error(`[VidZee] Error fetching streams:`, err.message);
                 // Save error status to cache
-                await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum, null, userScraperApiKey);
+                await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum, null, null);
                 return [];
             }
         }
@@ -1170,6 +1195,10 @@ builder.defineStreamHandler(async (args) => {
             // For Hianime, language is 'dub' or 'sub' from the stream object
             const category = stream.language ? (stream.language === 'sub' ? 'OG' : stream.language.toUpperCase()) : 'UNK';
             providerDisplayName = `Hianime ${category} 🍥`;
+        } else if (stream.provider === 'VidZee') {
+            if (stream.language) {
+                providerDisplayName = `VidZee ${stream.language.toUpperCase()}`;
+            }
         }
 
         let nameDisplay;
