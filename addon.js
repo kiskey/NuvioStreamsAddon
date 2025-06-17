@@ -90,6 +90,10 @@ console.log(`[addon.js] Xprime provider fetching enabled: ${ENABLE_XPRIME_PROVID
 const ENABLE_VIDZEE_PROVIDER = process.env.ENABLE_VIDZEE_PROVIDER !== 'false'; // Defaults to true
 console.log(`[addon.js] VidZee provider fetching enabled: ${ENABLE_VIDZEE_PROVIDER}`);
 
+// NEW: Read environment variable for MP4Hydra
+const ENABLE_MP4HYDRA_PROVIDER = process.env.ENABLE_MP4HYDRA_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
+console.log(`[addon.js] MP4Hydra provider fetching enabled: ${ENABLE_MP4HYDRA_PROVIDER}`);
+
 // NEW: Stream caching config
 const STREAM_CACHE_DIR = process.env.VERCEL ? path.join('/tmp', '.streams_cache') : path.join(__dirname, '.streams_cache');
 const STREAM_CACHE_TTL_MS = 9 * 60 * 1000; // 9 minutes
@@ -104,6 +108,7 @@ const { getCuevanaStreams } = require('./providers/cuevana.js'); // Import from 
 const { getHianimeStreams } = require('./providers/hianime.js'); // Import from hianime.js
 const { getStreamContent } = require('./providers/vidsrcextractor.js'); // Import from vidsrcextractor.js
 const { getVidZeeStreams } = require('./providers/VidZee.js'); // NEW: Import from VidZee.js
+const { getMP4HydraStreams } = require('./providers/MP4Hydra.js'); // NEW: Import from MP4Hydra.js
 
 // --- Constants ---
 const TMDB_API_URL = 'https://api.themoviedb.org/3';
@@ -1086,6 +1091,48 @@ builder.defineStreamHandler(async (args) => {
                 await saveStreamToCache('vidzee', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum, null, null);
                 return [];
             }
+        },
+
+        // MP4Hydra provider with cache integration
+        mp4hydra: async () => {
+            if (!ENABLE_MP4HYDRA_PROVIDER) { // Check if MP4Hydra is disabled
+                console.log('[MP4Hydra] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
+            if (!shouldFetch('mp4hydra')) {
+                console.log('[MP4Hydra] Skipping fetch: Not selected by user.');
+                return [];
+            }
+            
+            // Try to get cached streams first
+            const cachedStreams = await getStreamFromCache('mp4hydra', tmdbTypeFromId, tmdbId, seasonNum, episodeNum);
+            if (cachedStreams) {
+                console.log(`[MP4Hydra] Using ${cachedStreams.length} streams from cache.`);
+                return cachedStreams.map(stream => ({ ...stream, provider: 'MP4Hydra' }));
+            }
+            
+            // No cache or expired, fetch fresh
+            try {
+                console.log(`[MP4Hydra] Fetching new streams...`);
+                const streams = await getMP4HydraStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                
+                if (streams && streams.length > 0) {
+                    console.log(`[MP4Hydra] Successfully fetched ${streams.length} streams.`);
+                    // Save to cache
+                    await saveStreamToCache('mp4hydra', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum);
+                    return streams.map(stream => ({ ...stream, provider: 'MP4Hydra' }));
+                } else {
+                    console.log(`[MP4Hydra] No streams returned.`);
+                    // Save empty result
+                    await saveStreamToCache('mp4hydra', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
+                    return [];
+                }
+            } catch (err) {
+                console.error(`[MP4Hydra] Error fetching streams:`, err.message);
+                // Save error status to cache
+                await saveStreamToCache('mp4hydra', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
+                return [];
+            }
         }
     };
 
@@ -1102,7 +1149,8 @@ builder.defineStreamHandler(async (args) => {
             timeProvider('Cuevana', providerFetchFunctions.cuevana()),
             timeProvider('Hianime', providerFetchFunctions.hianime()),
             timeProvider('VidSrc', providerFetchFunctions.vidsrc()),
-            timeProvider('VidZee', providerFetchFunctions.vidzee())
+            timeProvider('VidZee', providerFetchFunctions.vidzee()),
+            timeProvider('MP4Hydra', providerFetchFunctions.mp4hydra()) // NEW: Add MP4Hydra provider
         ]);
         
         // Process results into streamsByProvider object
@@ -1114,7 +1162,8 @@ builder.defineStreamHandler(async (args) => {
             'Cuevana': ENABLE_CUEVANA_PROVIDER && shouldFetch('cuevana') ? filterStreamsByQuality(providerResults[4], minQualitiesPreferences.cuevana, 'Cuevana') : [],
             'Hianime': shouldFetch('hianime') ? filterStreamsByQuality(providerResults[5], minQualitiesPreferences.hianime, 'Hianime') : [],
             'VidSrc': shouldFetch('vidsrc') ? filterStreamsByQuality(providerResults[6], minQualitiesPreferences.vidsrc, 'VidSrc') : [],
-            'VidZee': ENABLE_VIDZEE_PROVIDER && shouldFetch('vidzee') ? filterStreamsByQuality(providerResults[7], minQualitiesPreferences.vidzee, 'VidZee') : []
+            'VidZee': ENABLE_VIDZEE_PROVIDER && shouldFetch('vidzee') ? filterStreamsByQuality(providerResults[7], minQualitiesPreferences.vidzee, 'VidZee') : [],
+            'MP4Hydra': ENABLE_MP4HYDRA_PROVIDER && shouldFetch('mp4hydra') ? filterStreamsByQuality(providerResults[8], minQualitiesPreferences.mp4hydra, 'MP4Hydra') : [] // NEW: Add MP4Hydra provider
         };
 
         // Sort streams by quality for each provider
@@ -1124,7 +1173,7 @@ builder.defineStreamHandler(async (args) => {
 
         // Combine streams in the preferred provider order
         combinedRawStreams = [];
-        const providerOrder = ['ShowBox', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'Cuevana', 'VidSrc'];
+        const providerOrder = ['ShowBox', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'MP4Hydra', 'Cuevana', 'VidSrc']; // NEW: Add MP4Hydra provider
         providerOrder.forEach(providerKey => {
             if (streamsByProvider[providerKey] && streamsByProvider[providerKey].length > 0) {
                 combinedRawStreams.push(...streamsByProvider[providerKey]);
@@ -1199,6 +1248,14 @@ builder.defineStreamHandler(async (args) => {
             if (stream.language) {
                 providerDisplayName = `VidZee ${stream.language.toUpperCase()}`;
             }
+        } else if (stream.provider === 'MP4Hydra') {
+            // Extract server number from title if present
+            const serverMatch = stream.title && stream.title.match(/\[MP4Hydra (#\d+)\]/);
+            if (serverMatch && serverMatch[1]) {
+                providerDisplayName = `MP4Hydra ${serverMatch[1]}`;
+            } else {
+                providerDisplayName = 'MP4Hydra';
+            }
         }
 
         let nameDisplay;
@@ -1225,6 +1282,10 @@ builder.defineStreamHandler(async (args) => {
             nameDisplay = stream.title || `${providerDisplayName} - ${stream.quality || 'Auto'}`;
             // If stream.title already includes providerDisplayName, we can simplify:
             // nameDisplay = stream.title; 
+        } else if (stream.provider === 'MP4Hydra') {
+            // For MP4Hydra, we want to show the server number prominently
+            const qualityLabel = stream.quality || 'UNK';
+            nameDisplay = `${providerDisplayName} - ${qualityLabel}`;
         } else { // For other providers (ShowBox, Xprime, etc.)
             const qualityLabel = stream.quality || 'UNK';
             if (flagEmoji) {

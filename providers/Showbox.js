@@ -1564,7 +1564,9 @@ const getShowboxUrlFromTmdbInfo = async (tmdbType, tmdbId, regionPreference = nu
 
 // Function to fetch sources for a single FID
 // MODIFICATION: Remove scraperApiKey parameter
-const fetchSourcesForSingleFid = async (fidToProcess, shareKey, regionPreference = null, userCookie = null) => {
+const fetchSourcesForSingleFid = async (fidToProcess, shareKey, regionPreference = null, userCookie = null, retryAttempt = 0) => {
+    const MAX_RETRIES_SAME_REGION = 1; // Retry once on the same region before falling back
+
     const targetPostData = new URLSearchParams();
     targetPostData.append('fid', fidToProcess);
     targetPostData.append('share_key', shareKey);
@@ -1613,9 +1615,18 @@ const fetchSourcesForSingleFid = async (fidToProcess, shareKey, regionPreference
                         jsonResponse.msg.includes("region") || 
                         jsonResponse.msg.includes("location") ||
                         jsonResponse.msg.includes("unavailable")) {
-                        // Mark the region as unavailable
+                        
+                        // --- BEGIN: Retry Logic ---
+                        if (retryAttempt < MAX_RETRIES_SAME_REGION) {
+                            console.log(`    Region error on attempt ${retryAttempt + 1}. Retrying same region: ${global.lastRequestedRegion.used}`);
+                            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+                            return fetchSourcesForSingleFid(fidToProcess, shareKey, regionPreference, userCookie, retryAttempt + 1);
+                        }
+                        // --- END: Retry Logic ---
+
+                        // Mark the region as unavailable after retries have failed
                         if (global.lastRequestedRegion && global.lastRequestedRegion.used) {
-                            console.log(`    Marking region ${global.lastRequestedRegion.used} as unavailable`);
+                            console.log(`    Marking region ${global.lastRequestedRegion.used} as unavailable after ${retryAttempt + 1} failed attempts.`);
                             global.regionAvailabilityStatus[global.lastRequestedRegion.used] = false;
                             
                             // Try again with a US fallback region if we haven't already
@@ -1623,7 +1634,8 @@ const fetchSourcesForSingleFid = async (fidToProcess, shareKey, regionPreference
                                 for (const fallbackRegion of US_FALLBACK_REGIONS) {
                                     if (fallbackRegion !== global.lastRequestedRegion.used) {
                                         console.log(`    Retrying with fallback US region: ${fallbackRegion}`);
-                                        return fetchSourcesForSingleFid(fidToProcess, shareKey, fallbackRegion, userCookie);
+                                        // Reset retryAttempt for the new region
+                                        return fetchSourcesForSingleFid(fidToProcess, shareKey, fallbackRegion, userCookie, 0);
                                     }
                                 }
                             }
@@ -1668,8 +1680,16 @@ const fetchSourcesForSingleFid = async (fidToProcess, shareKey, regionPreference
              error.message.includes('network') ||
              (error.response && (error.response.status === 403 || error.response.status === 404)))) {
             
+            // --- BEGIN: Retry Logic ---
+            if (retryAttempt < MAX_RETRIES_SAME_REGION) {
+                console.log(`    Network error on attempt ${retryAttempt + 1}. Retrying same region: ${global.lastRequestedRegion.used}`);
+                await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+                return fetchSourcesForSingleFid(fidToProcess, shareKey, regionPreference, userCookie, retryAttempt + 1);
+            }
+            // --- END: Retry Logic ---
+
             if (global.lastRequestedRegion && global.lastRequestedRegion.used) {
-                console.log(`    Marking region ${global.lastRequestedRegion.used} as potentially unavailable due to error`);
+                console.log(`    Marking region ${global.lastRequestedRegion.used} as potentially unavailable after ${retryAttempt + 1} failed attempts due to error.`);
                 global.regionAvailabilityStatus[global.lastRequestedRegion.used] = false;
                 
                 // Try again with a US fallback region if we haven't already
@@ -1677,7 +1697,8 @@ const fetchSourcesForSingleFid = async (fidToProcess, shareKey, regionPreference
                     for (const fallbackRegion of US_FALLBACK_REGIONS) {
                         if (fallbackRegion !== global.lastRequestedRegion.used) {
                             console.log(`    Retrying with fallback US region: ${fallbackRegion}`);
-                            return fetchSourcesForSingleFid(fidToProcess, shareKey, fallbackRegion, userCookie);
+                            // Reset retryAttempt for the new region
+                            return fetchSourcesForSingleFid(fidToProcess, shareKey, fallbackRegion, userCookie, 0);
                         }
                     }
                 }
