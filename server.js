@@ -350,6 +350,9 @@ app.get('*manifest.json', async (req, res) => {
         const originalManifest = addonInterface.manifest;
         let personalizedManifest = JSON.parse(JSON.stringify(originalManifest)); // Deep clone
 
+        // Always set the name to "Nuvio Streams Private Instance"
+        personalizedManifest.name = "Nuvio Streams Private Instance";
+
         // Ensure the config array exists
         if (!personalizedManifest.config) {
             personalizedManifest.config = [];
@@ -394,10 +397,16 @@ app.get('*manifest.json', async (req, res) => {
                     hidden: true // Hide this from user settings
                 });
             }
-            personalizedManifest.name = `${originalManifest.name} (${userRegion} Region)`;
+            // Only append region to the name if specified
+            personalizedManifest.name = `Nuvio Streams Private Instance (${userRegion} Region)`;
             personalizedManifest.description = `${originalManifest.description} (Using your ${userRegion} Region for enhanced access.)`;
             personalizedManifest.isRegionPersonalized = true; // Custom flag for UI
             console.log(`[Manifest] Region ${userRegion} applied to name, description, and config.`);
+        }
+        
+        // Update the description to mention it's a private instance if not already modified by region
+        if (!userRegion) {
+            personalizedManifest.description = `${originalManifest.description} (Private Instance)`;
         }
 
         if (userProviders) {

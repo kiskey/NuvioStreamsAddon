@@ -6,6 +6,8 @@
 const FLAGS = { CORS_ALLOWED: 'CORS_ALLOWED' };
 const BASE_URL = 'https://ws-m3u8.moonpic.qzz.io:3008/tmdb';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
+const PROXY_URL = process.env.CUEVANA_PROXY_URL;
+const M3U8_PROXY_URL = process.env.CUEVANA_M3U8_PROXY_URL;
 
 // Helper function to convert number to base36
 function intToBase36(num) {
@@ -52,6 +54,10 @@ function deobfuscateStreamwish(packedJs) {
 
 // Main function to scrape the links - adapted for module usage
 async function getCuevanaStreams(tmdbId, mediaType, season, episode) {
+  console.log(`[Cuevana] General requests connection mode: ${PROXY_URL ? 'Proxy' : 'Direct'}`);
+  console.log(`[Cuevana] M3U8 requests connection mode: ${M3U8_PROXY_URL ? 'Proxy' : 'Direct'}`);
+
+  const connectionIndicator = M3U8_PROXY_URL ? 'P' : 'D';
   // Build the URL based on media type
   let url = '';
   if (mediaType === 'movie') {
@@ -72,10 +78,11 @@ async function getCuevanaStreams(tmdbId, mediaType, season, episode) {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36'
   };
 
-  console.log(`[Cuevana] Fetching data from ${url}...`);
+  const requestUrl = PROXY_URL ? `${PROXY_URL}${url}` : url;
+  console.log(`[Cuevana] Fetching data from ${requestUrl}...`);
   
   try {
-    const response = await fetch(url, { headers: initialHeaders });
+    const response = await fetch(requestUrl, { headers: initialHeaders });
     
     if (!response.ok) {
       console.error(`[Cuevana] Failed to fetch data: ${response.status} ${response.statusText}`);
@@ -104,13 +111,6 @@ async function getCuevanaStreams(tmdbId, mediaType, season, episode) {
         }
       }
 
-      // TEMPORARY: Skip English streams - make this check case-insensitive for 'eng' and also check for 'english'
-      const lowerLangForEmbed = languageForEmbed.toLowerCase();
-      if (lowerLangForEmbed === 'eng' || lowerLangForEmbed === 'english') {
-        console.log(`[Cuevana] Skipping English stream (lang: ${languageForEmbed}) as requested: ${embed.url}`);
-        continue;
-      }
-
       let embedUrlObject;
       try {
         embedUrlObject = new URL(embed.url);
@@ -133,7 +133,8 @@ async function getCuevanaStreams(tmdbId, mediaType, season, episode) {
             'Referer': embedOrigin
           };
 
-          const embedResponse = await fetch(embed.url, { headers: embedPageHeaders });
+          const embedRequestUrl = PROXY_URL ? `${PROXY_URL}${embed.url}` : embed.url;
+          const embedResponse = await fetch(embedRequestUrl, { headers: embedPageHeaders });
           
           if (!embedResponse.ok) {
             console.warn(`[Cuevana] Failed to fetch embed ${embed.url}: ${embedResponse.status} ${embedResponse.statusText}`);
@@ -152,14 +153,21 @@ async function getCuevanaStreams(tmdbId, mediaType, season, episode) {
               console.log(`[Cuevana] Found master playlist: ${masterPlaylistUrl}`);
               
               const streamHeaders = {
-                'Referer': 'https://swiftplayers.com/',
-                'Origin': 'https://swiftplayers.com/',
+                'Referer': embedOrigin,
+                'Origin': embedOrigin,
                 'User-Agent': USER_AGENT
               };
 
               let variantsFound = 0;
               try {
-                const masterPlaylistResponse = await fetch(masterPlaylistUrl, { headers: streamHeaders });
+                let masterPlaylistResponse;
+                if (M3U8_PROXY_URL) {
+                  const proxiedMasterPlaylistUrl = `${M3U8_PROXY_URL}?url=${encodeURIComponent(masterPlaylistUrl)}&headers=${encodeURIComponent(JSON.stringify(streamHeaders))}`;
+                  masterPlaylistResponse = await fetch(proxiedMasterPlaylistUrl);
+                } else {
+                  masterPlaylistResponse = await fetch(masterPlaylistUrl, { headers: streamHeaders });
+                }
+
                 if (masterPlaylistResponse.ok) {
                   const masterPlaylistText = await masterPlaylistResponse.text();
                   const lines = masterPlaylistText.split(/\r?\n/);
@@ -182,31 +190,31 @@ async function getCuevanaStreams(tmdbId, mediaType, season, episode) {
                         }
                       }
 
-                      // TEMPORARY: Skip 480p or lower quality streams
-                      const resolutionNumber = parseInt(qualityLabel.match(/(\d+)p/)?.[1] || '1080', 10);
-                      if (resolutionNumber <= 480) {
-                        console.log(`[Cuevana] Skipping low quality stream (${qualityLabel}) as requested`);
-                        continue;
-                      }
-
                       if (i + 1 < lines.length && lines[i+1].trim() && !lines[i+1].startsWith('#')) {
                         const mediaPlaylistPath = lines[i+1].trim();
                         const mediaPlaylistUrl = new URL(mediaPlaylistPath, masterBaseUrl).href;
                         
                         const streamId = `cuevana-sw-${languageForEmbed}-${qualityLabel}-${embedStreamCounter}-${variantsFound}`;
                         
-                        streams.push({
+                        const stream = {
                           id: streamId,
                           type: 'hls',
-                          url: mediaPlaylistUrl, // URL that will be used in the addon
                           language: languageForEmbed,
                           quality: qualityLabel,
                           playlist: mediaPlaylistUrl, // For internal reference
                           flags: [FLAGS.CORS_ALLOWED],
-                          headers: streamHeaders,
                           provider: 'Cuevana',
-                          title: `Cuevana ${languageForEmbed.toUpperCase()} - ${qualityLabel}`
-                        });
+                          title: `Cuevana ${languageForEmbed.toUpperCase()} - ${qualityLabel} [${connectionIndicator}]`
+                        };
+
+                        if (M3U8_PROXY_URL) {
+                          stream.url = `${M3U8_PROXY_URL}?url=${encodeURIComponent(mediaPlaylistUrl)}&headers=${encodeURIComponent(JSON.stringify(streamHeaders))}`;
+                        } else {
+                          stream.url = mediaPlaylistUrl;
+                          stream.headers = streamHeaders;
+                        }
+                        
+                        streams.push(stream);
                         
                         variantsFound++;
                         console.log(`[Cuevana] Extracted variant: Lang(${languageForEmbed}) Qual(${qualityLabel})`);
@@ -216,18 +224,23 @@ async function getCuevanaStreams(tmdbId, mediaType, season, episode) {
                   
                   // If no variants found but the playlist itself contains segments
                   if (variantsFound === 0 && masterPlaylistText.includes('#EXTINF:')) {
-                    streams.push({
+                    const stream = {
                       id: `cuevana-sw-${languageForEmbed}-auto-${embedStreamCounter}-0`,
                       type: 'hls',
-                      url: masterPlaylistUrl, // URL that will be used in the addon
                       language: languageForEmbed,
                       quality: 'auto',
                       playlist: masterPlaylistUrl, // For internal reference
                       flags: [FLAGS.CORS_ALLOWED],
-                      headers: streamHeaders,
                       provider: 'Cuevana',
-                      title: `Cuevana ${languageForEmbed.toUpperCase()} - Auto`
-                    });
+                      title: `Cuevana ${languageForEmbed.toUpperCase()} - Auto [${connectionIndicator}]`
+                    };
+                    if (M3U8_PROXY_URL) {
+                        stream.url = `${M3U8_PROXY_URL}?url=${encodeURIComponent(masterPlaylistUrl)}&headers=${encodeURIComponent(JSON.stringify(streamHeaders))}`;
+                    } else {
+                        stream.url = masterPlaylistUrl;
+                        stream.headers = streamHeaders;
+                    }
+                    streams.push(stream);
                     
                     variantsFound++;
                     console.log(`[Cuevana] Using master as media playlist: Lang(${languageForEmbed}) Qual(auto)`);

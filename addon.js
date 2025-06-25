@@ -94,6 +94,10 @@ console.log(`[addon.js] VidZee provider fetching enabled: ${ENABLE_VIDZEE_PROVID
 const ENABLE_MP4HYDRA_PROVIDER = process.env.ENABLE_MP4HYDRA_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
 console.log(`[addon.js] MP4Hydra provider fetching enabled: ${ENABLE_MP4HYDRA_PROVIDER}`);
 
+// NEW: Read environment variable for HiAnime
+const ENABLE_HIANIME_PROVIDER = process.env.ENABLE_HIANIME_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
+console.log(`[addon.js] HiAnime provider fetching enabled: ${ENABLE_HIANIME_PROVIDER}`);
+
 // NEW: Stream caching config
 const STREAM_CACHE_DIR = process.env.VERCEL ? path.join('/tmp', '.streams_cache') : path.join(__dirname, '.streams_cache');
 const STREAM_CACHE_TTL_MS = 9 * 60 * 1000; // 9 minutes
@@ -966,12 +970,16 @@ builder.defineStreamHandler(async (args) => {
 
         // Hianime provider with cache integration
         hianime: async () => {
+            if (!ENABLE_HIANIME_PROVIDER) {
+                console.log('[Hianime] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
             if (!shouldFetch('hianime') || !(tmdbTypeFromId === 'tv' && seasonNum !== null && episodeNum !== null && isAnimation)) {
                 if (!shouldFetch('hianime')) {
                     console.log('[Hianime] Skipping fetch: Not selected by user.');
                 } else if (tmdbTypeFromId === 'tv' && !isAnimation) {
                     console.log('[Hianime] Skipping fetch: Content is a TV show but not identified as Animation.');
-    } else {
+                } else {
                     console.log('[Hianime] Skipping fetch: Not applicable content type or missing parameters.');
                 }
                 return [];
