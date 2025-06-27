@@ -8,8 +8,72 @@ const cheerio = require('cheerio');
 const FormData = require('form-data');
 const { CookieJar } = require('tough-cookie');
 const { wrapper } = require('axios-cookiejar-support');
+const fs = require('fs').promises;
+const path = require('path');
 
 const BASE_URL = 'https://moviesmod.chat';
+
+// Constants
+const TMDB_API_KEY_MOVIESMOD = "439c478a771f35c05022f9feabcca01c"; // Public TMDB API key
+
+// --- Caching Configuration ---
+const CACHE_ENABLED = process.env.DISABLE_CACHE !== 'true'; // Set to true to disable caching for this provider
+console.log(`[MoviesMod] Internal cache is ${CACHE_ENABLED ? 'enabled' : 'disabled'}.`);
+const CACHE_DIR = path.join(__dirname, '.cache', 'moviesmod'); // Cache directory inside providers/moviesmod
+const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+
+// --- Caching Helper Functions ---
+const ensureCacheDir = async () => {
+    if (!CACHE_ENABLED) return;
+    try {
+        await fs.mkdir(CACHE_DIR, { recursive: true });
+    } catch (error) {
+        if (error.code !== 'EEXIST') {
+            console.error(`[MoviesMod Cache] Error creating cache directory: ${error.message}`);
+        }
+    }
+};
+
+const getFromCache = async (key) => {
+    if (!CACHE_ENABLED) return null;
+    const cacheFile = path.join(CACHE_DIR, `${key}.json`);
+    try {
+        const data = await fs.readFile(cacheFile, 'utf-8');
+        const cached = JSON.parse(data);
+
+        if (Date.now() > cached.expiry) {
+            console.log(`[MoviesMod Cache] EXPIRED for key: ${key}`);
+            await fs.unlink(cacheFile).catch(() => {});
+            return null;
+        }
+
+        console.log(`[MoviesMod Cache] HIT for key: ${key}`);
+        return cached.data;
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            console.error(`[MoviesMod Cache] READ ERROR for key ${key}: ${error.message}`);
+        }
+        return null;
+    }
+};
+
+const saveToCache = async (key, data) => {
+    if (!CACHE_ENABLED) return;
+    const cacheFile = path.join(CACHE_DIR, `${key}.json`);
+    const cacheData = {
+        expiry: Date.now() + CACHE_TTL,
+        data: data
+    };
+    try {
+        await fs.writeFile(cacheFile, JSON.stringify(cacheData, null, 2), 'utf-8');
+        console.log(`[MoviesMod Cache] SAVED for key: ${key}`);
+    } catch (error) {
+        console.error(`[MoviesMod Cache] WRITE ERROR for key ${key}: ${error.message}`);
+    }
+};
+
+// Initialize cache directory on startup
+ensureCacheDir();
 
 // Helper function to extract quality from text
 function extractQuality(text) {
@@ -497,16 +561,34 @@ async function resolveVideoSeedLink(videoSeedUrl) {
 
 // Main function to get streams for TMDB content
 async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeNum = null) {
+    console.log(`[MoviesMod] Attempting to fetch streams for TMDB ID: ${tmdbId}, Type: ${mediaType}${mediaType === 'tv' ? `, S:${seasonNum}E:${episodeNum}` : ''}`);
+    
+    const cacheKey = `moviesmod_v2_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}e${episodeNum}` : ''}`;
+
     try {
-        console.log(`[MoviesMod] Fetching streams for TMDB ${mediaType}/${tmdbId}`);
-        
+        // 1. Check cache first
+        let cachedData = await getFromCache(cacheKey);
+        if (cachedData) {
+            console.log(`[MoviesMod Cache] Cache HIT for ${cacheKey}. Using ${cachedData.processedLinks?.length || 0} cached processed links.`);
+            
+            // Process cached data to get final download URLs
+            if (cachedData.processedLinks && cachedData.processedLinks.length > 0) {
+                return await processCachedLinks(cachedData.processedLinks, cachedData.mediaInfo, mediaType, seasonNum, episodeNum);
+            } else {
+                return [];
+            }
+        } else {
+            console.log(`[MoviesMod Cache] Cache MISS for ${cacheKey}. Fetching from source.`);
+        }
+
+        // 2. If cache miss, get TMDB info to perform search
         if (!tmdbId) {
             console.log('[MoviesMod] No TMDB ID provided');
             return [];
         }
 
         // We need to fetch title and year from TMDB API
-        const TMDB_API_KEY = process.env.TMDB_API_KEY;
+        const TMDB_API_KEY = process.env.TMDB_API_KEY || TMDB_API_KEY_MOVIESMOD;
         if (!TMDB_API_KEY) {
             console.log('[MoviesMod] TMDB_API_KEY not configured. Cannot fetch metadata.');
             return [];
@@ -540,19 +622,24 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
 
             if (!title) {
                 console.log('[MoviesMod] Could not get title from TMDB');
+                await saveToCache(cacheKey, { processedLinks: [], mediaInfo: { title: null, year: null } });
                 return [];
             }
 
             console.log(`[MoviesMod] Found metadata: ${title} (${year})`);
         } catch (error) {
             console.error(`[MoviesMod] Error fetching TMDB metadata: ${error.message}`);
+            await saveToCache(cacheKey, { processedLinks: [], mediaInfo: { title: null, year: null } });
             return [];
         }
+
+        const mediaInfo = { title, year };
 
         // Search for the content
         const searchResults = await searchMoviesMod(title);
         if (searchResults.length === 0) {
             console.log(`[MoviesMod] No search results found for "${title}"`);
+            await saveToCache(cacheKey, { processedLinks: [], mediaInfo });
             return [];
         }
 
@@ -564,6 +651,7 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
         const downloadLinks = await extractDownloadLinks(selectedResult.url);
         if (downloadLinks.length === 0) {
             console.log('[MoviesMod] No download links found');
+            await saveToCache(cacheKey, { processedLinks: [], mediaInfo });
             return [];
         }
 
@@ -585,11 +673,14 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
         relevantLinks = relevantLinks.filter(link => !link.quality.toLowerCase().includes('480p'));
         console.log(`[MoviesMod] Filtered out 480p links. Removed ${initialCount - relevantLinks.length} links. Remaining: ${relevantLinks.length}`);
 
-        const streams = [];
-        const processedFileNames = new Set(); // Set to track processed filenames for deduplication
+        if (relevantLinks.length === 0) {
+            console.log('[MoviesMod] No relevant links after filtering');
+            await saveToCache(cacheKey, { processedLinks: [], mediaInfo });
+            return [];
+        }
 
-        // Process each relevant link in parallel for better performance
-        const linkPromises = relevantLinks.map(async (link) => {
+        // Process each relevant link to get intermediate links (dramadrip, cinematickit, etc.)
+        const processedLinksPromises = relevantLinks.map(async (link) => {
             try {
                 console.log(`[MoviesMod] Processing: ${link.quality}`);
 
@@ -598,329 +689,334 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
                 
                 if (finalLinks.length === 0) {
                     console.log(`[MoviesMod] No final links found for ${link.quality}`);
+                    return null;
+                }
+
+                return {
+                    originalLink: link,
+                    finalLinks: finalLinks
+                };
+            } catch (error) {
+                console.error(`[MoviesMod] Error processing link ${link.quality}: ${error.message}`);
+                return null;
+            }
+        });
+
+        const processedLinks = (await Promise.all(processedLinksPromises)).filter(Boolean);
+
+        // Save to cache
+        if (processedLinks.length > 0) {
+            console.log(`[MoviesMod] Caching ${processedLinks.length} processed links for key: ${cacheKey}`);
+            await saveToCache(cacheKey, { processedLinks, mediaInfo });
+        } else {
+            console.log(`[MoviesMod] No processed links to cache. Caching empty result.`);
+            await saveToCache(cacheKey, { processedLinks: [], mediaInfo });
+            return [];
+        }
+
+        // Process cached data to get final streams
+        return await processCachedLinks(processedLinks, mediaInfo, mediaType, seasonNum, episodeNum);
+
+    } catch (error) {
+        console.error(`[MoviesMod] A critical error occurred in getMoviesModStreams for ${tmdbId}: ${error.message}`);
+        if (error.stack) console.error(error.stack);
+        return [];
+    }
+}
+
+// Helper function to process cached links and generate final streams
+async function processCachedLinks(processedLinks, mediaInfo, mediaType, seasonNum, episodeNum) {
+    const streams = [];
+    const processedFileNames = new Set(); // Set to track processed filenames for deduplication
+    const { title, year } = mediaInfo;
+
+    // Process each cached link in parallel for better performance
+    const linkPromises = processedLinks.map(async (processedLink) => {
+        try {
+            const { originalLink, finalLinks } = processedLink;
+
+            // For TV series with episodes, let user pick episode or use first episode
+            let targetLinks = finalLinks;
+            if (mediaType === 'tv' && episodeNum !== null) {
+                // Try to find specific episode
+                const episodeLinks = finalLinks.filter(fl => 
+                    fl.server.toLowerCase().includes(`episode ${episodeNum}`) ||
+                    fl.server.toLowerCase().includes(`ep ${episodeNum}`) ||
+                    fl.server.toLowerCase().includes(`e${episodeNum}`)
+                );
+                if (episodeLinks.length > 0) {
+                    targetLinks = episodeLinks;
+                } else {
+                    // If no specific episode found, skip this quality
+                    console.log(`[MoviesMod] No episode ${episodeNum} found for ${originalLink.quality}`);
                     return [];
                 }
+            }
 
-                // For TV series with episodes, let user pick episode or use first episode
-                let targetLinks = finalLinks;
-                if (mediaType === 'tv' && episodeNum !== null) {
-                    // Try to find specific episode
-                    const episodeLinks = finalLinks.filter(fl => 
-                        fl.server.toLowerCase().includes(`episode ${episodeNum}`) ||
-                        fl.server.toLowerCase().includes(`ep ${episodeNum}`) ||
-                        fl.server.toLowerCase().includes(`e${episodeNum}`)
-                    );
-                    if (episodeLinks.length > 0) {
-                        targetLinks = episodeLinks;
-                    } else {
-                        // If no specific episode found, skip this quality
-                        console.log(`[MoviesMod] No episode ${episodeNum} found for ${link.quality}`);
-                        return [];
-                    }
+            // Process each target link in parallel (usually just one for movies, or specific episode for TV)
+            const targetLinkPromises = targetLinks.map(async (targetLink) => {
+                const { downloadOptions, size: driveseedSize, fileName } = await resolveDriveseedLink(targetLink.url);
+                
+                if (fileName && processedFileNames.has(fileName)) {
+                    console.log(`[MoviesMod] Skipping duplicate file: ${fileName}`);
+                    return null;
+                }
+                if (fileName) {
+                    processedFileNames.add(fileName);
                 }
 
-                // Process each target link in parallel (usually just one for movies, or specific episode for TV)
-                const targetLinkPromises = targetLinks.map(async (targetLink) => {
-                    const { downloadOptions, size: driveseedSize, fileName } = await resolveDriveseedLink(targetLink.url);
-                    
-                    if (fileName && processedFileNames.has(fileName)) {
-                        console.log(`[MoviesMod] Skipping duplicate file: ${fileName}`);
-                        return null;
-                    }
-                    if (fileName) {
-                        processedFileNames.add(fileName);
-                    }
+                if (downloadOptions.length === 0) {
+                    console.log(`[MoviesMod] No download options found for ${targetLink.server}`);
+                    return null;
+                }
 
-                    if (downloadOptions.length === 0) {
-                        console.log(`[MoviesMod] No download options found for ${targetLink.server}`);
-                        return null;
-                    }
+                // Process all download options in parallel and take the first successful one
+                const methodPromises = downloadOptions.map(async (option) => {
+                    try {
+                        let finalDownloadUrl = null;
+                        let usedMethod = null;
 
-                    // Process all download options in parallel and take the first successful one
-                    const methodPromises = downloadOptions.map(async (option) => {
-                        try {
-                            let finalDownloadUrl = null;
-                            let usedMethod = null;
-
-                            if (option.type === 'resume') {
-                                finalDownloadUrl = await resolveResumeCloudLink(option.url);
-                                usedMethod = 'Resume Cloud';
-                            } else if (option.type === 'worker') {
-                                finalDownloadUrl = await resolveWorkerSeedLink(option.url);
-                                usedMethod = 'Resume Worker Bot';
-                            } else if (option.type === 'instant') {
-                                finalDownloadUrl = await resolveVideoSeedLink(option.url);
-                                usedMethod = 'Instant Download';
-                            }
-
-                            if (finalDownloadUrl) {
-                                return { url: finalDownloadUrl, method: usedMethod, type: option.type };
-                            }
-                            return null;
-                        } catch (error) {
-                            console.log(`[MoviesMod] Failed to resolve ${option.type}: ${error.message}`);
-                            return null;
+                        if (option.type === 'resume') {
+                            finalDownloadUrl = await resolveResumeCloudLink(option.url);
+                            usedMethod = 'Resume Cloud';
+                        } else if (option.type === 'worker') {
+                            finalDownloadUrl = await resolveWorkerSeedLink(option.url);
+                            usedMethod = 'Resume Worker Bot';
+                        } else if (option.type === 'instant') {
+                            finalDownloadUrl = await resolveVideoSeedLink(option.url);
+                            usedMethod = 'Instant Download';
                         }
-                    });
 
-                    // Wait for all methods to complete and take the first successful one
-                    // Priority: Resume Cloud > Resume Worker Bot > Instant Download
-                    const methodResults = await Promise.all(methodPromises);
-                    const successfulResults = methodResults.filter(result => result !== null);
-                    
-                    if (successfulResults.length === 0) {
-                        console.log(`[MoviesMod] All download methods failed for ${targetLink.server}`);
+                        if (finalDownloadUrl) {
+                            return { url: finalDownloadUrl, method: usedMethod, type: option.type };
+                        }
+                        return null;
+                    } catch (error) {
+                        console.log(`[MoviesMod] Failed to resolve ${option.type}: ${error.message}`);
                         return null;
                     }
+                });
 
-                    // Sort by priority: resume > worker > instant
-                    const priorityOrder = { 'resume': 1, 'worker': 2, 'instant': 3 };
-                    successfulResults.sort((a, b) => priorityOrder[a.type] - priorityOrder[b.type]);
-                    
-                    const selectedResult = successfulResults[0];
-                    console.log(`[MoviesMod] Successfully resolved using ${selectedResult.method}`);
+                // Wait for all methods to complete and take the first successful one
+                // Priority: Resume Cloud > Resume Worker Bot > Instant Download
+                const methodResults = await Promise.all(methodPromises);
+                const successfulResults = methodResults.filter(result => result !== null);
+                
+                if (successfulResults.length === 0) {
+                    console.log(`[MoviesMod] All download methods failed for ${targetLink.server}`);
+                    return null;
+                }
 
-                    // Extract quality and build detailed stream name
-                    let actualQuality = 'Unknown';
-                    let additionalInfo = [];
-                    let episodeInfo = '';
-                    let sourceInfo = '';
-                    let sizeInfo = driveseedSize;
-                    
-                    // --- 1. Extract Size Information First (if not already found) ---
-                    if (!sizeInfo) {
-                        if (targetLink.qualityInfo) {
-                            // For cinematickit links, size is in parentheses, e.g., "(220MB)"
-                            const sizeMatch = targetLink.qualityInfo.match(/\(([^)]+)\)/);
-                            if (sizeMatch && sizeMatch[1]) {
-                                sizeInfo = sizeMatch[1];
-                            }
-                        } else if (targetLink.quality) {
-                            // For main page links, size is in square brackets, e.g., "[1.9GB]"
-                            const sizeMatch = targetLink.quality.match(/\[([^\]]+)\]/);
-                            if (sizeMatch && sizeMatch[1]) {
-                                sizeInfo = sizeMatch[1];
-                            }
-                        }
-                    }
+                // Sort by priority: resume > worker > instant
+                const priorityOrder = { 'resume': 1, 'worker': 2, 'instant': 3 };
+                successfulResults.sort((a, b) => priorityOrder[a.type] - priorityOrder[b.type]);
+                
+                const selectedResult = successfulResults[0];
+                console.log(`[MoviesMod] Successfully resolved using ${selectedResult.method}`);
 
-                    // Build episode information for TV series
-                    if (mediaType === 'tv' && seasonNum !== null && episodeNum !== null) {
-                        episodeInfo = `S${seasonNum.toString().padStart(2, '0')}E${episodeNum.toString().padStart(2, '0')}`;
-                    }
-                    
-                    // --- 2. Extract Quality and Other Details ---
+                // Extract quality and build detailed stream name
+                let actualQuality = 'Unknown';
+                let additionalInfo = [];
+                let episodeInfo = '';
+                let sourceInfo = '';
+                let sizeInfo = driveseedSize;
+                
+                // --- 1. Extract Size Information First (if not already found) ---
+                if (!sizeInfo) {
                     if (targetLink.qualityInfo) {
-                        const qualityInfo = targetLink.qualityInfo;
-                        console.log(`[MoviesMod] Using quality info from cinematickit: ${qualityInfo}`);
-                        
-                        // Extract quality from qualityInfo
-                        const qualityMatch = qualityInfo.match(/(480p|720p|1080p|2160p|4k)/i);
-                        if (qualityMatch) {
-                            actualQuality = qualityMatch[1];
-                        }
-                        
-                        // Extract codec info from qualityInfo
-                        if (qualityInfo.toLowerCase().includes('x264')) additionalInfo.push('x264');
-                        if (qualityInfo.toLowerCase().includes('x265') || qualityInfo.toLowerCase().includes('hevc')) additionalInfo.push('HEVC');
-                        if (qualityInfo.toLowerCase().includes('10bit')) additionalInfo.push('10-bit');
-                        
-                        // Extract size info from qualityInfo (e.g., "(220MB)", "(1.9GB)")
-                        const sizeMatch = qualityInfo.match(/\(([^)]+)\)/);
+                        // For cinematickit links, size is in parentheses, e.g., "(220MB)"
+                        const sizeMatch = targetLink.qualityInfo.match(/\(([^)]+)\)/);
                         if (sizeMatch && sizeMatch[1]) {
                             sizeInfo = sizeMatch[1];
                         }
-                        
-                    } else if (selectedResult.url) {
-                        // Fallback: Extract from URL filename
-                        const urlPath = selectedResult.url.split('/').pop() || '';
-                        const qualityMatch = urlPath.match(/(480p|720p|1080p|2160p|4k)/i);
-                        if (qualityMatch) {
-                            actualQuality = qualityMatch[1];
-                        } else {
-                            // Final fallback to the original quality extraction from description
-                            actualQuality = extractQuality(link.quality);
-                        }
-                        
-                        // Extract additional info from filename
-                        if (urlPath.toLowerCase().includes('x264')) additionalInfo.push('x264');
-                        if (urlPath.toLowerCase().includes('x265') || urlPath.toLowerCase().includes('hevc')) additionalInfo.push('HEVC');
-                        if (urlPath.toLowerCase().includes('10bit')) additionalInfo.push('10-bit');
-                        if (urlPath.toLowerCase().includes('hdr')) additionalInfo.push('HDR');
-                        
-                        // Extract language info from filename
-                        const langMatches = urlPath.match(/(Hindi|English|Korean|Tamil|Telugu|Spanish|French|Dual|Multi)/gi);
-                        if (langMatches) {
-                            const uniqueLangs = [...new Set(langMatches.map(lang => lang.charAt(0).toUpperCase() + lang.slice(1).toLowerCase()))];
-                            if (uniqueLangs.includes('Multi') || uniqueLangs.length > 2) {
-                                additionalInfo.push('Multi Audio');
-                            } else if (uniqueLangs.includes('Dual') || uniqueLangs.length === 2) {
-                                additionalInfo.push('Dual Audio');
-                            } else if (uniqueLangs.length === 1 && !uniqueLangs.includes('English')) {
-                                additionalInfo.push(uniqueLangs[0]);
-                            }
-                        }
-                        
-                        // Extract subtitle info
-                        if (urlPath.toLowerCase().includes('msubs') || urlPath.toLowerCase().includes('subs')) {
-                            additionalInfo.push('Subs');
+                    } else if (targetLink.quality) {
+                        // For main page links, size is in square brackets, e.g., "[1.9GB]"
+                        const sizeMatch = targetLink.quality.match(/\[([^\]]+)\]/);
+                        if (sizeMatch && sizeMatch[1]) {
+                            sizeInfo = sizeMatch[1];
                         }
                     }
+                }
+
+                // Build episode information for TV series
+                if (mediaType === 'tv' && seasonNum !== null && episodeNum !== null) {
+                    episodeInfo = `S${seasonNum.toString().padStart(2, '0')}E${episodeNum.toString().padStart(2, '0')}`;
+                }
+                
+                // --- 2. Extract Quality and Other Details ---
+                if (targetLink.qualityInfo) {
+                    const qualityInfo = targetLink.qualityInfo;
+                    console.log(`[MoviesMod] Using quality info from cinematickit: ${qualityInfo}`);
                     
-                    // Build source information
-                    sourceInfo = `MoviesMod [${selectedResult.method}]`;
-                    
-                    // Build simple name for the stream (just provider and basic quality info)
-                    let streamName = 'MoviesMod';
-                    if (actualQuality !== 'Unknown') {
-                        streamName += ` - ${actualQuality}`;
+                    // Extract quality from qualityInfo
+                    const qualityMatch = qualityInfo.match(/(480p|720p|1080p|2160p|4k)/i);
+                    if (qualityMatch) {
+                        actualQuality = qualityMatch[1];
                     }
                     
-                    // Add key technical details to name (codec and bit depth only)
-                    let nameExtras = [];
-                    if (targetLink.qualityInfo) {
-                        if (targetLink.qualityInfo.toLowerCase().includes('10bit')) nameExtras.push('10-bit');
-                        if (targetLink.qualityInfo.toLowerCase().includes('x265') || targetLink.qualityInfo.toLowerCase().includes('hevc')) nameExtras.push('HEVC');
-                        else if (targetLink.qualityInfo.toLowerCase().includes('x264')) nameExtras.push('x264');
-                    } else if (selectedResult.url) {
-                        const urlPath = selectedResult.url.split('/').pop() || '';
-                        if (urlPath.toLowerCase().includes('10bit')) nameExtras.push('10-bit');
-                        if (urlPath.toLowerCase().includes('x265') || urlPath.toLowerCase().includes('hevc')) nameExtras.push('HEVC');
-                        else if (urlPath.toLowerCase().includes('x264')) nameExtras.push('x264');
+                    // Extract codec info from qualityInfo
+                    if (qualityInfo.toLowerCase().includes('x264')) additionalInfo.push('x264');
+                    if (qualityInfo.toLowerCase().includes('x265') || qualityInfo.toLowerCase().includes('hevc')) additionalInfo.push('HEVC');
+                    if (qualityInfo.toLowerCase().includes('10bit')) additionalInfo.push('10-bit');
+                    
+                    // Extract size info from qualityInfo (e.g., "(220MB)", "(1.9GB)")
+                    const sizeMatch = qualityInfo.match(/\(([^)]+)\)/);
+                    if (sizeMatch && sizeMatch[1]) {
+                        sizeInfo = sizeMatch[1];
                     }
                     
-                    if (nameExtras.length > 0) {
-                        streamName += ` | ${nameExtras.join(' | ')}`;
-                    }
-                    
-                    // Build detailed title with all information
-                    let detailedTitle = '';
-                    
-                    // Use filename from driveseed if available for a more accurate title
-                    if (fileName) {
-                        // Clean up filename (remove extension, replace dots with spaces)
-                        const cleanFileName = fileName.replace(/\.[^/.]+$/, "").replace(/\./g, ' ');
-                        detailedTitle = cleanFileName;
-                    } else if (mediaType === 'tv' && seasonNum !== null && episodeNum !== null) {
-                        detailedTitle = `${title} S${seasonNum.toString().padStart(2, '0')}E${episodeNum.toString().padStart(2, '0')}`;
-                        
-                        // Try to extract episode title from filename
-                        if (selectedResult.url) {
-                            const filename = selectedResult.url.split('/').pop() || '';
-                            const episodeTitleMatch = filename.match(/(?:S\d+)?E\d+\.([^.]+)(?:\.\d+p)?/i);
-                            if (episodeTitleMatch && episodeTitleMatch[1]) {
-                                const cleanEpisodeTitle = episodeTitleMatch[1].replace(/[._]/g, ' ').trim();
-                                if (cleanEpisodeTitle.length > 3 && !cleanEpisodeTitle.match(/^\d+p$/i)) {
-                                    detailedTitle += ` • ${cleanEpisodeTitle}`;
-                                }
-                            }
-                        }
+                } else if (selectedResult.url) {
+                    // Fallback: Extract from URL filename
+                    const urlPath = selectedResult.url.split('/').pop() || '';
+                    const qualityMatch = urlPath.match(/(480p|720p|1080p|2160p|4k)/i);
+                    if (qualityMatch) {
+                        actualQuality = qualityMatch[1];
                     } else {
-                        // For movies
-                        detailedTitle = title;
-                        if (year) {
-                            detailedTitle += ` (${year})`;
+                        // Final fallback to the original quality extraction from description
+                        actualQuality = extractQuality(originalLink.quality);
+                    }
+                    
+                    // Extract additional info from filename
+                    if (urlPath.toLowerCase().includes('x264')) additionalInfo.push('x264');
+                    if (urlPath.toLowerCase().includes('x265') || urlPath.toLowerCase().includes('hevc')) additionalInfo.push('HEVC');
+                    if (urlPath.toLowerCase().includes('10bit')) additionalInfo.push('10-bit');
+                    if (urlPath.toLowerCase().includes('hdr')) additionalInfo.push('HDR');
+                    
+                    // Extract language info from filename
+                    const langMatches = urlPath.match(/(Hindi|English|Korean|Tamil|Telugu|Spanish|French|Dual|Multi)/gi);
+                    if (langMatches) {
+                        const uniqueLangs = [...new Set(langMatches.map(lang => lang.charAt(0).toUpperCase() + lang.slice(1).toLowerCase()))];
+                        if (uniqueLangs.includes('Multi') || uniqueLangs.length > 2) {
+                            additionalInfo.push('Multi Audio');
+                        } else if (uniqueLangs.includes('Dual') || uniqueLangs.length === 2) {
+                            additionalInfo.push('Dual Audio');
+                        } else if (uniqueLangs.length === 1 && !uniqueLangs.includes('English')) {
+                            additionalInfo.push(uniqueLangs[0]);
                         }
                     }
                     
-                    // Add technical details line
-                    let techDetails = [];
-                    
-                    // Add download method
-                    techDetails.push(`[${selectedResult.method}]`);
-                    
-                    if (sizeInfo) {
-                        techDetails.push(sizeInfo);
+                    // Extract subtitle info
+                    if (urlPath.toLowerCase().includes('msubs') || urlPath.toLowerCase().includes('subs')) {
+                        additionalInfo.push('Subs');
                     }
-
-                    // Add quality info
-                    if (actualQuality !== 'Unknown') {
-                        techDetails.push(actualQuality);
-                    }
+                }
+                
+                // Build source information
+                sourceInfo = `MoviesMod [${selectedResult.method}]`;
+                
+                // Build simple name for the stream (just provider and basic quality info)
+                let streamName = 'MoviesMod';
+                if (actualQuality !== 'Unknown') {
+                    streamName += ` - ${actualQuality}`;
+                }
+                
+                // Add key technical details to name (codec and bit depth only)
+                let nameExtras = [];
+                if (targetLink.qualityInfo) {
+                    if (targetLink.qualityInfo.toLowerCase().includes('10bit')) nameExtras.push('10-bit');
+                    if (targetLink.qualityInfo.toLowerCase().includes('x265') || targetLink.qualityInfo.toLowerCase().includes('hevc')) nameExtras.push('HEVC');
+                    else if (targetLink.qualityInfo.toLowerCase().includes('x264')) nameExtras.push('x264');
+                } else if (selectedResult.url) {
+                    const urlPath = selectedResult.url.split('/').pop() || '';
+                    if (urlPath.toLowerCase().includes('10bit')) nameExtras.push('10-bit');
+                    if (urlPath.toLowerCase().includes('x265') || urlPath.toLowerCase().includes('hevc')) nameExtras.push('HEVC');
+                    else if (urlPath.toLowerCase().includes('x264')) nameExtras.push('x264');
+                }
+                
+                if (nameExtras.length > 0) {
+                    streamName += ` | ${nameExtras.join(' | ')}`;
+                }
+                
+                // Build detailed title with all information
+                let detailedTitle = '';
+                
+                // Use filename from driveseed if available for a more accurate title
+                if (fileName) {
+                    // Clean up filename (remove extension, replace dots with spaces)
+                    const cleanFileName = fileName.replace(/\.[^/.]+$/, "").replace(/\./g, ' ');
+                    detailedTitle = cleanFileName;
+                } else if (mediaType === 'tv' && seasonNum !== null && episodeNum !== null) {
+                    detailedTitle = `${title} S${seasonNum.toString().padStart(2, '0')}E${episodeNum.toString().padStart(2, '0')}`;
                     
-                    // Add codec and bit depth
-                    if (targetLink.qualityInfo) {
-                        if (targetLink.qualityInfo.toLowerCase().includes('x264')) techDetails.push('x264');
-                        if (targetLink.qualityInfo.toLowerCase().includes('x265') || targetLink.qualityInfo.toLowerCase().includes('hevc')) techDetails.push('HEVC');
-                        if (targetLink.qualityInfo.toLowerCase().includes('10bit')) techDetails.push('10-bit');
-                        if (targetLink.qualityInfo.toLowerCase().includes('hdr')) techDetails.push('HDR');
-                        
-                        // Add size
-                        const sizeMatch = targetLink.qualityInfo.match(/\(([^)]+)\)/);
-                        if (sizeMatch) {
-                            techDetails.push(sizeMatch[1]);
-                        }
-                    } else if (selectedResult.url) {
-                        const urlPath = selectedResult.url.split('/').pop() || '';
-                        if (urlPath.toLowerCase().includes('x264')) techDetails.push('x264');
-                        if (urlPath.toLowerCase().includes('x265') || urlPath.toLowerCase().includes('hevc')) techDetails.push('HEVC');
-                        if (urlPath.toLowerCase().includes('10bit')) techDetails.push('10-bit');
-                        if (urlPath.toLowerCase().includes('hdr')) techDetails.push('HDR');
-                        
-                        // Add language info
-                        const langMatches = urlPath.match(/(Hindi|English|Korean|Tamil|Telugu|Spanish|French|Dual|Multi)/gi);
-                        if (langMatches) {
-                            const uniqueLangs = [...new Set(langMatches.map(lang => lang.charAt(0).toUpperCase() + lang.slice(1).toLowerCase()))];
-                            if (uniqueLangs.includes('Multi') || uniqueLangs.length > 2) {
-                                techDetails.push('Multi Audio');
-                            } else if (uniqueLangs.includes('Dual') || uniqueLangs.length === 2) {
-                                techDetails.push('Dual Audio');
-                            } else if (uniqueLangs.length === 1 && !uniqueLangs.includes('English')) {
-                                techDetails.push(uniqueLangs[0]);
+                    // Try to extract episode title from filename
+                    if (selectedResult.url) {
+                        const filename = selectedResult.url.split('/').pop() || '';
+                        const episodeTitleMatch = filename.match(/(?:S\d+)?E\d+\.([^.]+)(?:\.\d+p)?/i);
+                        if (episodeTitleMatch && episodeTitleMatch[1]) {
+                            const cleanEpisodeTitle = episodeTitleMatch[1].replace(/[._]/g, ' ').trim();
+                            if (cleanEpisodeTitle.length > 3 && !cleanEpisodeTitle.match(/^\d+p$/i)) {
+                                detailedTitle += ` • ${cleanEpisodeTitle}`;
                             }
                         }
-                        
-                        // Add subtitle info
-                        if (urlPath.toLowerCase().includes('msubs') || urlPath.toLowerCase().includes('subs')) {
-                            techDetails.push('Subs');
-                        }
                     }
-                    
-                    // Combine title with tech details
-                    if (techDetails.length > 0) {
-                        detailedTitle += `\n${techDetails.join(' • ')}`;
+                } else {
+                    // For movies
+                    detailedTitle = title;
+                    if (year) {
+                        detailedTitle += ` (${year})`;
                     }
-                    
-                    return {
-                        name: streamName,
-                        title: detailedTitle,
-                        url: selectedResult.url,
-                        quality: actualQuality,
-                        provider: 'MoviesMod',
-                        method: selectedResult.method,
-                        size: sizeInfo,
-                        fileName: fileName
-                    };
-                });
+                }
+                
+                // Add technical details line
+                let techDetails = [];
+                
+                // Add download method
+                techDetails.push(`[${selectedResult.method}]`);
+                
+                if (sizeInfo) {
+                    techDetails.push(sizeInfo);
+                }
+                
+                if (additionalInfo.length > 0) {
+                    techDetails.push(additionalInfo.join(' | '));
+                }
+                
+                if (techDetails.length > 0) {
+                    detailedTitle += `\n${techDetails.join(' • ')}`;
+                }
 
-                // Wait for all target links to be processed in parallel
-                const targetResults = await Promise.all(targetLinkPromises);
-                return targetResults.filter(result => result !== null);
+                return {
+                    name: streamName,
+                    title: detailedTitle,
+                    url: selectedResult.url,
+                    provider: 'MoviesMod',
+                    quality: actualQuality,
+                    size: sizeInfo,
+                    method: selectedResult.method,
+                    fileName: fileName
+                };
+            });
 
-            } catch (error) {
-                console.error(`[MoviesMod] Error processing link ${link.quality}: ${error.message}`);
-                return [];
-            }
-        });
+            // Wait for all target links to be processed in parallel
+            console.log(`[MoviesMod] Processing ${targetLinks.length} download options in parallel...`);
+            const targetResults = await Promise.all(targetLinkPromises);
+            
+            // Return all successful results
+            return targetResults.filter(result => result !== null);
 
-        // Wait for all links to be processed in parallel
-        console.log(`[MoviesMod] Processing ${relevantLinks.length} download options in parallel...`);
-        const allResults = await Promise.all(linkPromises);
-        
-        // Flatten the results and add them to streams array
-        allResults.forEach(results => {
-            if (Array.isArray(results)) {
-                streams.push(...results);
-            }
-        });
+        } catch (error) {
+            console.error(`[MoviesMod] Error processing link ${originalLink.quality}: ${error.message}`);
+            return [];
+        }
+    });
 
-        console.log(`[MoviesMod] Successfully extracted ${streams.length} streams`);
-        return streams;
+    // Wait for all links to be processed in parallel
+    console.log(`[MoviesMod] Processing ${processedLinks.length} download options in parallel...`);
+    const allResults = await Promise.all(linkPromises);
+    
+    // Flatten results and add to streams array
+    allResults.forEach(resultArray => {
+        if (Array.isArray(resultArray)) {
+            resultArray.forEach(stream => {
+                if (stream) {
+                    streams.push(stream);
+                }
+            });
+        }
+    });
 
-    } catch (error) {
-        console.error(`[MoviesMod] Error getting streams: ${error.message}`);
-        return [];
-    }
+    console.log(`[MoviesMod] Successfully extracted ${streams.length} streams`);
+    return streams;
 }
 
 module.exports = {
