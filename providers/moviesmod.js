@@ -136,12 +136,18 @@ async function extractDownloadLinks(moviePageUrl) {
             const blockContent = header.nextUntil('h3, h4');
 
             if (header.is('h3') && headerText.toLowerCase().includes('season')) {
+                // Skip 480p seasons completely
+                if (headerText.toLowerCase().includes('480p')) {
+                    console.log(`[MoviesMod] Skipping 480p season: ${headerText}`);
+                    return; // Skip this header entirely
+                }
+                
                 // TV Show Logic
                 const linkElements = blockContent.find('a.maxbutton-episode-links, a.maxbutton-batch-zip');
                 linkElements.each((j, linkEl) => {
                     const buttonText = $(linkEl).text().trim();
                     const linkUrl = $(linkEl).attr('href');
-                    if (linkUrl && !buttonText.toLowerCase().includes('batch')) {
+                    if (linkUrl && !buttonText.toLowerCase().includes('batch') && !buttonText.toLowerCase().includes('480p')) {
                         links.push({
                             quality: `${headerText} - ${buttonText}`,
                             url: linkUrl
@@ -149,6 +155,12 @@ async function extractDownloadLinks(moviePageUrl) {
                     }
                 });
             } else if (header.is('h4')) {
+                // Skip 480p movies completely
+                if (headerText.toLowerCase().includes('480p')) {
+                    console.log(`[MoviesMod] Skipping 480p movie quality: ${headerText}`);
+                    return; // Skip this header entirely
+                }
+                
                 // Movie Logic
                 const linkElement = blockContent.find('a[href*="modrefer.in"]').first();
                 if (linkElement.length > 0) {
@@ -183,7 +195,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl) {
             $$('a[href*="cinematickit.org"]').each((i, el) => {
                 const link = $$(el).attr('href');
                 const text = $$(el).text().trim();
-                if (link && text) {
+                if (link && text && !text.toLowerCase().includes('480p')) {
                     cinematicKitLinks.push({ url: link, quality: text });
                 }
             });
@@ -238,7 +250,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl) {
             $('a[href*="driveseed.org"]').each((i, el) => {
                 const link = $(el).attr('href');
                 const text = $(el).text().trim();
-                if (link && text && !text.toLowerCase().includes('batch')) {
+                if (link && text && !text.toLowerCase().includes('batch') && !text.toLowerCase().includes('480p')) {
                     finalLinks.push({
                         server: text.replace(/\s+/g, ' '),
                         url: link,
@@ -251,7 +263,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl) {
                 $('a[href*="modrefer.in"], a[href*="dramadrip.com"]').each((i, el) => {
                     const link = $(el).attr('href');
                     const text = $(el).text().trim();
-                    if (link && text) {
+                    if (link && text && !text.toLowerCase().includes('480p')) {
                         finalLinks.push({
                             server: text.replace(/\s+/g, ' '),
                             url: link,
@@ -270,7 +282,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl) {
             $('.entry-content a[href*="driveseed.org"]').each((i, el) => {
                 const link = $(el).attr('href');
                 const text = $(el).text().trim();
-                if (link && text && !text.toLowerCase().includes('batch')) {
+                if (link && text && !text.toLowerCase().includes('batch') && !text.toLowerCase().includes('480p')) {
                     finalLinks.push({
                         server: text.replace(/\s+/g, ' '),
                         url: link,
@@ -559,11 +571,102 @@ async function resolveVideoSeedLink(videoSeedUrl) {
     }
 }
 
+// Function to find the best matching search result
+function findBestMatch(searchResults, targetTitle, targetYear, mediaType) {
+    if (!searchResults || searchResults.length === 0) {
+        return null;
+    }
+
+    // Normalize strings for comparison
+    const normalizeString = (str) => {
+        return str.toLowerCase()
+            .replace(/[^\w\s]/g, ' ')  // Replace special chars with spaces
+            .replace(/\s+/g, ' ')      // Collapse multiple spaces
+            .trim();
+    };
+
+    const normalizedTarget = normalizeString(targetTitle);
+    const targetWords = normalizedTarget.split(' ').filter(word => word.length > 2);
+
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const result of searchResults) {
+        const normalizedResult = normalizeString(result.title);
+        let score = 0;
+
+        // Check if the target title is contained in the result title
+        if (normalizedResult.includes(normalizedTarget)) {
+            score += 50; // High score for exact substring match
+        }
+
+        // Check word overlap
+        const resultWords = normalizedResult.split(' ').filter(word => word.length > 2);
+        const commonWords = targetWords.filter(word => resultWords.includes(word));
+        score += (commonWords.length / targetWords.length) * 30;
+
+        // Year matching bonus (if year is available)
+        if (targetYear) {
+            const yearMatch = result.title.match(/\((\d{4})\)/);
+            if (yearMatch) {
+                const resultYear = parseInt(yearMatch[1]);
+                const yearDiff = Math.abs(resultYear - parseInt(targetYear));
+                if (yearDiff === 0) {
+                    score += 20; // Exact year match
+                } else if (yearDiff <= 1) {
+                    score += 10; // Close year match
+                } else if (yearDiff > 3) {
+                    score -= 20; // Penalize very different years
+                }
+            }
+        }
+
+        // Penalize results with extra words that don't match
+        const extraWords = resultWords.filter(word => !targetWords.includes(word));
+        if (extraWords.length > 3) {
+            score -= 10; // Penalize results with too many extra words
+        }
+
+        // Special penalty for clearly different content
+        const resultLower = normalizedResult;
+        if (resultLower.includes('conversation') || 
+            resultLower.includes('behind the scenes') ||
+            resultLower.includes('making of') ||
+            resultLower.includes('documentary') ||
+            resultLower.includes('interview')) {
+            score -= 30; // Heavy penalty for documentary/conversation content
+        }
+
+        // For TV shows, prefer results that mention "season" or "series"
+        if (mediaType === 'tv') {
+            if (resultLower.includes('season') || resultLower.includes('series') || resultLower.includes('complete')) {
+                score += 15;
+            }
+        }
+
+        console.log(`[MoviesMod] Match score for "${result.title}": ${score}`);
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMatch = result;
+        }
+    }
+
+    // Only return a match if the score is above a threshold
+    if (bestScore >= 30) {
+        console.log(`[MoviesMod] Best match: "${bestMatch.title}" (score: ${bestScore})`);
+        return bestMatch;
+    }
+
+    console.log(`[MoviesMod] No good match found. Best score was ${bestScore} for "${bestMatch?.title}"`);
+    return null;
+}
+
 // Main function to get streams for TMDB content
 async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeNum = null) {
     console.log(`[MoviesMod] Attempting to fetch streams for TMDB ID: ${tmdbId}, Type: ${mediaType}${mediaType === 'tv' ? `, S:${seasonNum}E:${episodeNum}` : ''}`);
     
-    const cacheKey = `moviesmod_v2_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}e${episodeNum}` : ''}`;
+    const cacheKey = `moviesmod_v4_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}e${episodeNum}` : ''}`;
 
     try {
         // 1. Check cache first
@@ -643,8 +746,13 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
             return [];
         }
 
-        // Find the best match (simple heuristic - first result for now)
-        const selectedResult = searchResults[0];
+        // Find the best match using proper matching logic
+        const selectedResult = findBestMatch(searchResults, title, year, mediaType);
+        if (!selectedResult) {
+            console.log(`[MoviesMod] No matching content found for "${title}" (${year})`);
+            await saveToCache(cacheKey, { processedLinks: [], mediaInfo });
+            return [];
+        }
         console.log(`[MoviesMod] Selected: ${selectedResult.title}`);
 
         // Extract download links from the page
@@ -657,21 +765,21 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
 
         console.log(`[MoviesMod] Found ${downloadLinks.length} download options`);
 
+        // Filter out all 480p links immediately
+        const initialCount = downloadLinks.length;
+        const filteredLinks = downloadLinks.filter(link => !link.quality.toLowerCase().includes('480p'));
+        console.log(`[MoviesMod] Filtered out 480p links. Removed ${initialCount - filteredLinks.length} links. Remaining: ${filteredLinks.length}`);
+
         // For TV series, filter by season if specified
-        let relevantLinks = downloadLinks;
+        let relevantLinks = filteredLinks;
         if (mediaType === 'tv' || mediaType === 'series') {
             if (seasonNum !== null) {
-                relevantLinks = downloadLinks.filter(link => 
+                relevantLinks = filteredLinks.filter(link => 
                     link.quality.toLowerCase().includes(`season ${seasonNum}`) ||
                     link.quality.toLowerCase().includes(`s${seasonNum}`)
                 );
             }
         }
-        
-        // Filter out all 480p links to ensure only higher qualities are processed
-        const initialCount = relevantLinks.length;
-        relevantLinks = relevantLinks.filter(link => !link.quality.toLowerCase().includes('480p'));
-        console.log(`[MoviesMod] Filtered out 480p links. Removed ${initialCount - relevantLinks.length} links. Remaining: ${relevantLinks.length}`);
 
         if (relevantLinks.length === 0) {
             console.log('[MoviesMod] No relevant links after filtering');
@@ -902,7 +1010,7 @@ async function processCachedLinks(processedLinks, mediaInfo, mediaType, seasonNu
                 }
                 
                 // Build source information
-                sourceInfo = `MoviesMod [${selectedResult.method}]`;
+                sourceInfo = `MoviesMod`;
                 
                 // Build simple name for the stream (just provider and basic quality info)
                 let streamName = 'MoviesMod';
@@ -959,9 +1067,6 @@ async function processCachedLinks(processedLinks, mediaInfo, mediaType, seasonNu
                 
                 // Add technical details line
                 let techDetails = [];
-                
-                // Add download method
-                techDetails.push(`[${selectedResult.method}]`);
                 
                 if (sizeInfo) {
                     techDetails.push(sizeInfo);

@@ -237,18 +237,18 @@ async function extractTvShowDownloadLinks(showPageUrl, season, episode) {
             // Is this a paragraph with episode links?
             if ($el.is('p') && $el.find('a[href*="tech.unblockedgames.world"]').length > 0) {
                 const linksParagraph = $el;
-                const episodeRegex = new RegExp(`^Episode\\s+0*${episode}(?!\\d)`, 'i');
-                const targetEpisodeLink = linksParagraph.find('a').filter((i, el) => {
-                    return episodeRegex.test($(el).text().trim());
-                }).first();
+            const episodeRegex = new RegExp(`^Episode\\s+0*${episode}(?!\\d)`, 'i');
+            const targetEpisodeLink = linksParagraph.find('a').filter((i, el) => {
+                return episodeRegex.test($(el).text().trim());
+            }).first();
+            
+            if (targetEpisodeLink.length > 0) {
+                const link = targetEpisodeLink.attr('href');
+                if (link && !downloadLinks.some(item => item.link === link)) {
+                    const sizeMatch = qualityText.match(/\[\s*([0-9.,]+\s*[KMGT]B)/i);
+                    const size = sizeMatch ? sizeMatch[1] : 'Unknown';
 
-                if (targetEpisodeLink.length > 0) {
-                    const link = targetEpisodeLink.attr('href');
-                    if (link && !downloadLinks.some(item => item.link === link)) {
-                        const sizeMatch = qualityText.match(/\[\s*([0-9.,]+\s*[KMGT]B)/i);
-                        const size = sizeMatch ? sizeMatch[1] : 'Unknown';
-
-                        const cleanQuality = extractCleanQuality(qualityText);
+                    const cleanQuality = extractCleanQuality(qualityText);
                         const rawQuality = qualityText.replace(/(\r\n|\n|\r)/gm," ").replace(/\s+/g, ' ').trim();
                         
                         console.log(`[UHDMovies] Found match: Quality='${qualityText}', Link='${link}'`);
@@ -749,25 +749,25 @@ async function getUHDMoviesStreams(tmdbId, mediaType = 'movie', season = null, e
         console.log(`[UHDMovies] Cache MISS for ${cacheKey}. Fetching from source.`);
         // 2. If cache miss, get TMDB info to perform search
         const tmdbUrl = `https://api.themoviedb.org/3/${mediaType === 'tv' ? 'tv' : 'movie'}/${tmdbId}?api_key=${TMDB_API_KEY_UHDMOVIES}`;
-        const tmdbResponse = await axios.get(tmdbUrl);
-        const tmdbData = tmdbResponse.data;
-        const mediaInfo = {
+    const tmdbResponse = await axios.get(tmdbUrl);
+    const tmdbData = tmdbResponse.data;
+    const mediaInfo = {
             title: mediaType === 'tv' ? tmdbData.name : tmdbData.title,
             year: parseInt(((mediaType === 'tv' ? tmdbData.first_air_date : tmdbData.release_date) || '').split('-')[0], 10)
-        };
-
+    };
+    
         if (!mediaInfo.title) throw new Error('Could not extract title from TMDB response.');
-        console.log(`[UHDMovies] TMDB Info: "${mediaInfo.title}" (${mediaInfo.year || 'N/A'})`);
-
+    console.log(`[UHDMovies] TMDB Info: "${mediaInfo.title}" (${mediaInfo.year || 'N/A'})`);
+    
         // 3. Search for the media on UHDMovies
         const searchTitle = mediaInfo.title.replace(/\\s*&\\s*/g, ' and ');
-        const searchResults = await searchMovies(searchTitle);
-        if (searchResults.length === 0) {
-            console.log(`[UHDMovies] No search results found for "${mediaInfo.title}".`);
+    const searchResults = await searchMovies(searchTitle);
+    if (searchResults.length === 0) {
+      console.log(`[UHDMovies] No search results found for "${mediaInfo.title}".`);
             await saveToCache(cacheKey, []); // Cache empty result to prevent re-scraping
-            return [];
-        }
-
+      return [];
+    }
+    
         // 4. Find the best matching result
         const matchingResult = searchResults.find(result => compareMedia(mediaInfo, result));
         if (!matchingResult) {
@@ -782,9 +782,9 @@ async function getUHDMoviesStreams(tmdbId, mediaType = 'movie', season = null, e
         if (downloadInfo.links.length === 0) {
             console.log('[UHDMovies] No download links found on page.');
             await saveToCache(cacheKey, []);
-            return [];
-        }
-
+      return [];
+    }
+    
         // 6. Resolve all SID links to Driveleech links in parallel
         console.log(`[UHDMovies] Resolving ${downloadInfo.links.length} SID link(s)...`);
         const resolutionPromises = downloadInfo.links.map(async (linkInfo) => {
@@ -814,18 +814,18 @@ async function getUHDMoviesStreams(tmdbId, mediaType = 'movie', season = null, e
     if (!cachedLinks || cachedLinks.length === 0) {
         console.log('[UHDMovies] No Driveleech links found after scraping/cache check.');
         return [];
-    }
-
+        }
+        
     // 8. Process all Driveleech links (from cache or fresh) to get final download URLs
     console.log(`[UHDMovies] Processing ${cachedLinks.length} Driveleech link(s) to get final download URLs.`);
     const streamPromises = cachedLinks.map(async (linkInfo) => {
-        try {
+          try {
             const finalLinkData = await getFinalLink(linkInfo.driveleechUrl);
 
             if (finalLinkData && finalLinkData.url) {
                 const rawQuality = linkInfo.rawQuality || '';
                 const codecs = extractCodecs(rawQuality);
-                return {
+              return {
                     name: `UHDMovies`,
                     title: `${linkInfo.quality || 'Unknown'}\\n${finalLinkData.size || linkInfo.size || 'Unknown'}`,
                     url: finalLinkData.url,
@@ -839,23 +839,23 @@ async function getUHDMoviesStreams(tmdbId, mediaType = 'movie', season = null, e
                 console.warn(`[UHDMovies] Failed to get final link for: ${linkInfo.driveleechUrl}`);
                 return null;
             }
-        } catch (error) {
+          } catch (error) {
             console.error(`[UHDMovies] Error processing driveleech link ${linkInfo.driveleechUrl}: ${error.message}`);
             return null;
-        }
-    });
-
+          }
+        });
+        
     const streams = (await Promise.all(streamPromises)).filter(Boolean);
     console.log(`[UHDMovies] Successfully processed ${streams.length} final stream links.`);
-    
+        
     // Sort final streams by size
-    streams.sort((a, b) => {
-        const sizeA = parseSize(a.size);
-        const sizeB = parseSize(b.size);
-        return sizeB - sizeA;
-    });
-
-    return streams;
+            streams.sort((a, b) => {
+              const sizeA = parseSize(a.size);
+              const sizeB = parseSize(b.size);
+              return sizeB - sizeA;
+            });
+            
+            return streams;
   } catch (error) {
     console.error(`[UHDMovies] A critical error occurred in getUHDMoviesStreams for ${tmdbId}: ${error.message}`);
     if (error.stack) console.error(error.stack);
