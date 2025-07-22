@@ -4,9 +4,9 @@ on:
   # This workflow is now triggered manually OR by the API call from the sync workflow
   workflow_dispatch:
   # We keep the push trigger in case you push manual commits to master
-  push:
-    branches:
-      - master
+#  push:
+#    branches:
+3      - master
 
 env:
   DOCKER_REPO_NAME: nuviostreams
