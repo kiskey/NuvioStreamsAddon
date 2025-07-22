@@ -1,20 +1,21 @@
 name: Build and Push Docker Image
 
 on:
+  # This workflow is now triggered manually OR by the API call from the sync workflow
+  workflow_dispatch:
+  # We keep the push trigger in case you push manual commits to master
   push:
     branches:
-      - master # Trigger on pushes to the main branch
-  workflow_dispatch: # Allows manual triggering of the workflow
+      - master
 
 env:
-  # DOCKER_IMAGE_NAME will be constructed in the job using the DOCKER_USERNAME secret
-  DOCKER_REPO_NAME: nuviostreams # Only the repository part of the image name
+  DOCKER_REPO_NAME: nuviostreams
   DOCKER_TAG: latest
 
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
-    environment: Production # Optional: You can define an environment for deployment if needed
+    environment: Production
 
     steps:
       - name: Checkout repository
@@ -30,17 +31,14 @@ jobs:
         id: set_image_name
         run: |
           echo "DOCKER_IMAGE_FULL_NAME=${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_REPO_NAME }}" >> "$GITHUB_ENV"
-        # This step creates a new environment variable DOCKER_IMAGE_FULL_NAME
-        # that combines the Docker Hub username secret and the DOCKER_REPO_NAME.
 
-      - name: Build Docker image
-        id: docker_build
+      - name: Build and Push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: ${{ env.DOCKER_IMAGE_FULL_NAME }}:${{ env.DOCKER_TAG }}
-          file: ./Dockerfile # Explicitly specify the Dockerfile path
+          file: ./Dockerfile
 
       - name: Verify image push
         run: echo "Docker image ${{ env.DOCKER_IMAGE_FULL_NAME }}:${{ env.DOCKER_TAG }} pushed successfully!"
