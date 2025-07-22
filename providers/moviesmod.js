@@ -102,65 +102,6 @@ ensureCacheDir();
 // Constants
 const TMDB_API_KEY_MOVIESMOD = "439c478a771f35c05022f9feabcca01c"; // Public TMDB API key
 
-// --- Caching Configuration ---
- //CACHE_ENABLED = process.env.DISABLE_CACHE !== 'true'; // Set to true to disable caching for this provider
-//console.log(`[MoviesMod] Internal cache is ${CACHE_ENABLED ? 'enabled' : 'disabled'}.`);
-// CACHE_DIR = path.join(__dirname, '.cache', 'moviesmod'); // Cache directory inside providers/moviesmod
-const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
-
-// --- Caching Helper Functions ---
-const ensureCacheDir = async () => {
-    if (!CACHE_ENABLED) return;
-    try {
-        await fs.mkdir(CACHE_DIR, { recursive: true });
-    } catch (error) {
-        if (error.code !== 'EEXIST') {
-            console.error(`[MoviesMod Cache] Error creating cache directory: ${error.message}`);
-        }
-    }
-};
-
-const getFromCache = async (key) => {
-    if (!CACHE_ENABLED) return null;
-    const cacheFile = path.join(CACHE_DIR, `${key}.json`);
-    try {
-        const data = await fs.readFile(cacheFile, 'utf-8');
-        const cached = JSON.parse(data);
-
-        if (Date.now() > cached.expiry) {
-            console.log(`[MoviesMod Cache] EXPIRED for key: ${key}`);
-            await fs.unlink(cacheFile).catch(() => {});
-            return null;
-        }
-
-        console.log(`[MoviesMod Cache] HIT for key: ${key}`);
-        return cached.data;
-    } catch (error) {
-        if (error.code !== 'ENOENT') {
-            console.error(`[MoviesMod Cache] READ ERROR for key ${key}: ${error.message}`);
-        }
-        return null;
-    }
-};
-
-const saveToCache = async (key, data) => {
-    if (!CACHE_ENABLED) return;
-    const cacheFile = path.join(CACHE_DIR, `${key}.json`);
-    const cacheData = {
-        expiry: Date.now() + CACHE_TTL,
-        data: data
-    };
-    try {
-        await fs.writeFile(cacheFile, JSON.stringify(cacheData, null, 2), 'utf-8');
-        console.log(`[MoviesMod Cache] SAVED for key: ${key}`);
-    } catch (error) {
-        console.error(`[MoviesMod Cache] WRITE ERROR for key ${key}: ${error.message}`);
-    }
-};
-
-// Initialize cache directory on startup
-ensureCacheDir();
-
 // Helper function to extract quality from text
 function extractQuality(text) {
     if (!text) return 'Unknown';
@@ -178,6 +119,7 @@ function extractQuality(text) {
 
     return 'Unknown';
 }
+
 
 function parseQualityForSort(qualityString) {
     if (!qualityString) return 0;
@@ -283,6 +225,64 @@ async function extractDownloadLinks(moviePageUrl) {
         return [];
     }
 }
+
+// DEDUPULICATED HELPER: Extracts info from a loaded Driveseed page
+function extractDriveseedInfoFromPage($) {
+    const downloadOptions = [];
+    let size = null;
+    let fileName = null;
+
+    $('ul.list-group li').each((i, el) => {
+        const text = $(el).text();
+        if (text.includes('Size :')) {
+            const sizeMatch = text.match(/Size\s*:\s*([0-9.,]+\s*[KMGT]B)/);
+            if (sizeMatch) size = sizeMatch[1];
+        } else if (text.includes('Name :')) {
+            fileName = text.split(':')[1].trim();
+        }
+    });
+
+    if (!fileName) {
+        const h5Title = $('div.card-header h5').clone().children().remove().end().text().trim();
+        if (h5Title) {
+            fileName = h5Title.replace(/\[.*\]/, '').trim();
+        }
+    }
+
+    const resumeCloudLink = $('a:contains("Resume Cloud")').attr('href');
+    if (resumeCloudLink) {
+        downloadOptions.push({
+            title: 'Resume Cloud',
+            type: 'resume',
+            url: `https://driveseed.org${resumeCloudLink}`,
+            priority: 1
+        });
+    }
+
+    const workerSeedLink = $('a:contains("Resume Worker Bot")').attr('href');
+    if (workerSeedLink) {
+        downloadOptions.push({
+            title: 'Resume Worker Bot',
+            type: 'worker',
+            url: workerSeedLink,
+            priority: 2
+        });
+    }
+
+    const instantDownloadLink = $('a:contains("Instant Download")').attr('href');
+    if (instantDownloadLink) {
+        downloadOptions.push({
+            title: 'Instant Download',
+            type: 'instant',
+            url: instantDownloadLink,
+            priority: 3
+        });
+    }
+
+    downloadOptions.sort((a, b) => a.priority - b.priority);
+    return { downloadOptions, size, fileName };
+}
+
 
 // Resolve intermediate links (dramadrip, episodes.modpro.blog, modrefer.in)
 async function resolveIntermediateLink(initialUrl, refererUrl, quality) {
@@ -563,58 +563,11 @@ async function resolveDriveseedLink(driveseedUrl) {
             });
 
             const $ = cheerio.load(finalResponse.data);
-            const downloadOptions = [];
-            let size = null;
-            let fileName = null;
-
-            // Extract size and filename from the list
-            $('ul.list-group li').each((i, el) => {
-                const text = $(el).text();
-                if (text.includes('Size :')) {
-                    size = text.split(':')[1].trim();
-                } else if (text.includes('Name :')) {
-                    fileName = text.split(':')[1].trim();
-                }
-            });
-
-            // Find Resume Cloud button (primary)
-            const resumeCloudLink = $('a:contains("Resume Cloud")').attr('href');
-            if (resumeCloudLink) {
-                downloadOptions.push({
-                    title: 'Resume Cloud',
-                    type: 'resume',
-                    url: `https://driveseed.org${resumeCloudLink}`,
-                    priority: 1
-                });
-            }
-
-            // Find Resume Worker Bot (fallback)
-            const workerSeedLink = $('a:contains("Resume Worker Bot")').attr('href');
-            if (workerSeedLink) {
-                downloadOptions.push({
-                    title: 'Resume Worker Bot',
-                    type: 'worker',
-                    url: workerSeedLink,
-                    priority: 2
-                });
-            }
-
-            // Find Instant Download (final fallback)
-            const instantDownloadLink = $('a:contains("Instant Download")').attr('href');
-            if (instantDownloadLink) {
-                downloadOptions.push({
-                    title: 'Instant Download',
-                    type: 'instant',
-                    url: instantDownloadLink,
-                    priority: 3
-                });
-            }
-
-            // Sort by priority
-            downloadOptions.sort((a, b) => a.priority - b.priority);
-            return { downloadOptions, size, fileName };
+            return extractDriveseedInfoFromPage($);
         }
-        return { downloadOptions: [], size: null, fileName: null };
+        // If there's no JS redirect, the current page might be the final one.
+        const $ = cheerio.load(data);
+        return extractDriveseedInfoFromPage($);
     } catch (error) {
         console.error(`[MoviesMod] Error resolving Driveseed link: ${error.message}`);
         return { downloadOptions: [], size: null, fileName: null };
@@ -671,15 +624,6 @@ async function resolveWorkerSeedLink(workerSeedUrl) {
 
         if (!scriptContent) {
             console.error('[MoviesMod] Could not find the relevant script tag containing formData.append.');
-
-            // Debug: Log available script content
-            console.log(`[MoviesMod] Found ${scriptTags.length} script tags. Checking for token patterns...`);
-            scriptTags.forEach((script, i) => {
-                if (script.includes('token') || script.includes('formData')) {
-                    console.log(`[MoviesMod] Script ${i} snippet:`, script.substring(0, 300));
-                }
-            });
-
             return null;
         }
 
@@ -688,23 +632,6 @@ async function resolveWorkerSeedLink(workerSeedUrl) {
 
         if (!tokenMatch || !tokenMatch[1] || !idMatch || !idMatch[1]) {
             console.error('[MoviesMod] Could not extract token or correct ID from the script.');
-            console.log('[MoviesMod] Script content snippet:', scriptContent.substring(0, 500));
-
-            // Try alternative patterns
-            const altTokenMatch = scriptContent.match(/token['"]?\s*[:=]\s*['"]([^'"]+)['"]/);
-            const altIdMatch = scriptContent.match(/id['"]?\s*[:=]\s*['"]([^'"]+)['"]/);
-
-            if (altTokenMatch && altIdMatch) {
-                console.log('[MoviesMod] Found alternative patterns, trying those...');
-                const token = altTokenMatch[1];
-                const id = altIdMatch[1];
-                console.log(`[MoviesMod] Alternative token: ${token.substring(0, 20)}...`);
-                console.log(`[MoviesMod] Alternative id: ${id}`);
-
-                // Continue with these values
-                return await makeWorkerSeedRequest(session, token, id, workerSeedUrl);
-            }
-
             return null;
         }
 
@@ -789,9 +716,8 @@ console.log(`[MoviesMod] URL validation is ${URL_VALIDATION_ENABLED ? 'enabled' 
 
 // Validate if a video URL is working (not 404 or broken)
 async function validateVideoUrl(url, timeout = 10000) {
-    // Skip validation if disabled via environment variable
     if (!URL_VALIDATION_ENABLED) {
-        console.log(`[MoviesMod] URL validation disabled, skipping validation for: ${url.substring(0, 100)}...`);
+        console.log(`[MoviesMod] URL validation disabled, skipping validation.`);
         return true;
     }
 
@@ -805,7 +731,6 @@ async function validateVideoUrl(url, timeout = 10000) {
             }
         });
 
-        // Check if status is OK (200-299) or partial content (206)
         if (response.status >= 200 && response.status < 400) {
             console.log(`[MoviesMod] ✓ URL validation successful (${response.status})`);
             return true;
@@ -865,13 +790,7 @@ async function processEpisodesParallel(finalFilePageLinks, episodeNum = null) {
             const serverName = link.server.toLowerCase();
             let extractedEpisodeNum = null;
             
-            // Try multiple episode patterns
-            const episodePatterns = [
-                /episode\s+(\d+)/i,
-                /ep\s+(\d+)/i,
-                /e(\d+)/i,
-                /\b(\d+)\b/
-            ];
+            const episodePatterns = [/episode\s+(\d+)/i, /ep\s+(\d+)/i, /e(\d+)/i, /\b(\d+)\b/];
             
             for (const pattern of episodePatterns) {
                 const match = serverName.match(pattern);
@@ -881,37 +800,20 @@ async function processEpisodesParallel(finalFilePageLinks, episodeNum = null) {
                 }
             }
             
-            return {
-                ...link,
-                episodeInfo: {
-                    episode: extractedEpisodeNum,
-                    originalServer: link.server
-                }
-            };
+            return { ...link, episodeInfo: { episode: extractedEpisodeNum, originalServer: link.server } };
         } catch (error) {
-            return {
-                ...link,
-                episodeInfo: {
-                    episode: null,
-                    originalServer: link.server,
-                    error: error.message
-                }
-            };
+            return { ...link, episodeInfo: { episode: null, originalServer: link.server, error: error.message } };
         }
     });
     
     const processedLinks = await Promise.all(episodePromises);
     
-    // Filter for specific episode if requested
     if (episodeNum !== null) {
-        const filteredLinks = processedLinks.filter(link => 
-            link.episodeInfo?.episode === episodeNum
-        );
+        const filteredLinks = processedLinks.filter(link => link.episodeInfo?.episode === episodeNum);
         console.log(`[MoviesMod] ✓ Parallel episode processing: Found ${filteredLinks.length} matches for episode ${episodeNum}`);
         return filteredLinks;
     }
     
-    console.log(`[MoviesMod] ✓ Parallel episode processing complete: ${processedLinks.length} episodes processed`);
     return processedLinks;
 }
 
@@ -942,42 +844,28 @@ async function resolveSIDLinksParallel(sidUrls) {
     return resolvedResults;
 }
 
+
 // Main function to get streams for TMDB content
 async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeNum = null) {
     console.log(`[MoviesMod] Attempting to fetch streams for TMDB ID: ${tmdbId}, Type: ${mediaType}${mediaType === 'tv' ? `, S:${seasonNum}E:${episodeNum}` : ''}`);
-    
-    const cacheKey = `moviesmod_v4_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}e${episodeNum}` : ''}`;
 
     try {
-        console.log(`[MoviesMod] Fetching streams for TMDB ${mediaType}/${tmdbId}${seasonNum ? `, S${seasonNum}E${episodeNum}` : ''}`);
-
-        // Define a cache key based on the media type and ID. For series, cache per season.
         const cacheKey = `moviesmod_final_v12_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}` : ''}`;
         let resolvedQualities = await getFromCache(cacheKey);
 
-        // Ensure resolvedQualities is properly structured
         if (resolvedQualities && !Array.isArray(resolvedQualities)) {
-            console.log(`[MoviesMod] Cache data is not an array, attempting to extract data property:`, typeof resolvedQualities);
             if (resolvedQualities.data && Array.isArray(resolvedQualities.data)) {
                 resolvedQualities = resolvedQualities.data;
             } else {
-                console.log(`[MoviesMod] Cache data structure is invalid, treating as cache miss`);
                 resolvedQualities = null;
             }
         }
 
         if (!resolvedQualities || resolvedQualities.length === 0) {
-            if (resolvedQualities && resolvedQualities.length === 0) {
-                console.log(`[MoviesMod] Cache contains empty data for ${cacheKey}. Refetching from source.`);
-            } else {
-                console.log(`[MoviesMod Cache] MISS for key: ${cacheKey}. Fetching from source.`);
-            }
-
-            // We need to fetch title and year from TMDB API
-            const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
+            console.log(`[MoviesMod Cache] MISS for key: ${cacheKey}. Fetching from source.`);
 
             const { default: fetch } = await import('node-fetch');
-            const tmdbUrl = `https://api.themoviedb.org/3/${mediaType === 'tv' ? 'tv' : 'movie'}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
+            const tmdbUrl = `https://api.themoviedb.org/3/${mediaType === 'tv' ? 'tv' : 'movie'}/${tmdbId}?api_key=${TMDB_API_KEY_MOVIESMOD}&language=en-US`;
             const tmdbDetails = await (await fetch(tmdbUrl)).json();
 
             const title = mediaType === 'tv' ? tmdbDetails.name : tmdbDetails.title;
@@ -988,141 +876,79 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
             const searchResults = await searchMoviesMod(title);
             if (searchResults.length === 0) throw new Error(`No search results found for "${title}"`);
 
-            // --- NEW: Use string similarity to find the best match ---
             const titles = searchResults.map(r => r.title);
             const bestMatch = findBestMatch(title, titles);
-
-            console.log(`[MoviesMod] Best match for "${title}" is "${bestMatch.bestMatch.target}" with a rating of ${bestMatch.bestMatch.rating.toFixed(2)}`);
-
             let selectedResult = null;
-            // Set a minimum similarity threshold (e.g., 0.3) to avoid obviously wrong matches
             if (bestMatch.bestMatch.rating > 0.3) {
                 selectedResult = searchResults[bestMatch.bestMatchIndex];
-
-                // Additional check for year if it's a movie
-                if (mediaType === 'movie' && year) {
-                    if (!selectedResult.title.includes(year)) {
-                        console.warn(`[MoviesMod] Title match found, but year mismatch. Matched: "${selectedResult.title}", Expected year: ${year}. Discarding match.`);
-                        selectedResult = null; // Discard if year doesn't match
-                    }
+                if (mediaType === 'movie' && year && !selectedResult.title.includes(year)) {
+                    selectedResult = null;
                 }
             }
 
             if (!selectedResult) {
-                // If no good match is found, try a stricter direct search using regex with word boundaries
-                console.log('[MoviesMod] Similarity match failed or was below threshold. Trying stricter name/year search with word boundaries...');
                 const titleRegex = new RegExp(`\\b${escapeRegExp(title.toLowerCase())}\\b`);
-
-                if (mediaType === 'movie') {
-                    selectedResult = searchResults.find(r =>
-                        titleRegex.test(r.title.toLowerCase()) &&
-                        (!year || r.title.includes(year))
-                    );
-                } else { // for 'tv'
-                    // For TV, be more lenient on year, but check for title and 'season' keyword.
-                    selectedResult = searchResults.find(r =>
-                        titleRegex.test(r.title.toLowerCase()) &&
-                        r.title.toLowerCase().includes('season')
-                    );
-                }
+                selectedResult = searchResults.find(r =>
+                    titleRegex.test(r.title.toLowerCase()) &&
+                    (mediaType === 'tv' || !year || r.title.includes(year) || r.title.toLowerCase().includes('season'))
+                );
             }
 
-            if (!selectedResult) {
-                throw new Error(`No suitable search result found for "${title} (${year})". Best similarity match was too low or failed year check.`);
-            }
+            if (!selectedResult) throw new Error(`No suitable search result found for "${title} (${year})".`);
 
             console.log(`[MoviesMod] Selected: ${selectedResult.title}`);
             const downloadLinks = await extractDownloadLinks(selectedResult.url);
-            if (downloadLinks.length === 0) throw new Error('No download links found');
-
-            let relevantLinks = downloadLinks;
+            
+            let relevantLinks = downloadLinks.filter(link => !link.quality.toLowerCase().includes('480p'));
             if ((mediaType === 'tv' || mediaType === 'series') && seasonNum !== null) {
-                relevantLinks = downloadLinks.filter(link => link.quality.toLowerCase().includes(`season ${seasonNum}`) || link.quality.toLowerCase().includes(`s${seasonNum}`));
+                relevantLinks = relevantLinks.filter(link => link.quality.toLowerCase().includes(`season ${seasonNum}`));
             }
-
-            // Filter out 480p links before processing
-            relevantLinks = relevantLinks.filter(link => !link.quality.toLowerCase().includes('480p'));
-            console.log(`[MoviesMod] ${relevantLinks.length} links remaining after 480p filter.`);
-
-            if (relevantLinks.length > 0) {
-                console.log(`[MoviesMod] Found ${relevantLinks.length} relevant quality links.`);
+            
+            if (relevantLinks.length === 0) {
+                resolvedQualities = [];
+            } else {
                 const qualityPromises = relevantLinks.map(async (link) => {
                     try {
                         const finalLinks = await resolveIntermediateLink(link.url, selectedResult.url, link.quality);
                         if (!finalLinks || finalLinks.length === 0) return null;
 
-                        // Resolve to driveseed redirect URLs (intermediate step) for caching
                         const driveseedPromises = finalLinks.map(async (targetLink) => {
-                            try {
-                                let currentUrl = targetLink.url;
-
-                                // Handle SID links if they appear
-                                if (currentUrl.includes('tech.unblockedgames.world') || currentUrl.includes('tech.creativeexpressionsblog.com') || currentUrl.includes('tech.examzculture.in')) {
-                                    const resolvedUrl = await resolveTechUnblockedLink(currentUrl);
-                                    if (!resolvedUrl) return null;
-                                    currentUrl = resolvedUrl;
-                                }
-
-                                // Only process if it's a driveseed URL
-                                if (currentUrl && currentUrl.includes('driveseed.org')) {
-                                    console.log(`[MoviesMod] Caching driveseed redirect URL for ${targetLink.server}: ${currentUrl}`);
-                                    return { ...targetLink, driveseedRedirectUrl: currentUrl };
-                                }
-                                return null;
-                            } catch (error) {
-                                console.error(`[MoviesMod] Error resolving server ${targetLink.server}: ${error.message}`);
-                                return null;
+                            let currentUrl = targetLink.url;
+                            if (currentUrl.includes('tech.unblockedgames.world')) { // Simple check for SID links
+                                const resolvedUrl = await resolveTechUnblockedLink(currentUrl);
+                                if (!resolvedUrl) return null;
+                                currentUrl = resolvedUrl;
                             }
+                            if (currentUrl && currentUrl.includes('driveseed.org')) {
+                                return { ...targetLink, driveseedRedirectUrl: currentUrl };
+                            }
+                            return null;
                         });
-
                         const driveseedRedirectLinks = (await Promise.all(driveseedPromises)).filter(Boolean);
                         if (driveseedRedirectLinks.length > 0) {
-                            return { quality: link.quality, driveseedRedirectLinks: driveseedRedirectLinks };
+                            return { quality: link.quality, driveseedRedirectLinks };
                         }
                         return null;
                     } catch (error) {
-                        console.error(`[MoviesMod] Error processing quality ${link.quality}: ${error.message}`);
                         return null;
                     }
                 });
-
                 resolvedQualities = (await Promise.all(qualityPromises)).filter(Boolean);
-            } else {
-                resolvedQualities = [];
-            }
-
-            if (resolvedQualities.length > 0) {
-                console.log(`[MoviesMod] Caching ${resolvedQualities.length} qualities with resolved driveseed redirect URLs for key: ${cacheKey}`);
             }
             await saveToCache(cacheKey, resolvedQualities);
         }
 
-        if (!resolvedQualities || resolvedQualities.length === 0) {
-            console.log('[MoviesMod] No final file page URLs found from cache or scraping.');
-            return [];
-        }
+        if (!resolvedQualities || resolvedQualities.length === 0) return [];
 
-        // Ensure resolvedQualities is an array
-        if (!Array.isArray(resolvedQualities)) {
-            console.error('[MoviesMod] resolvedQualities is not an array:', typeof resolvedQualities, resolvedQualities);
-            return [];
-        }
-
-        console.log(`[MoviesMod] Processing ${resolvedQualities.length} qualities with cached driveseed redirect URLs to get final streams.`);
         const streams = [];
         const processedFileNames = new Set();
 
         const qualityProcessingPromises = resolvedQualities.map(async (qualityInfo) => {
             const { quality, driveseedRedirectLinks } = qualityInfo;
 
-            // Use parallel episode processing for TV shows
             let targetLinks = driveseedRedirectLinks;
             if ((mediaType === 'tv' || mediaType === 'series') && episodeNum !== null) {
                 targetLinks = await processEpisodesParallel(driveseedRedirectLinks, episodeNum);
-                if (targetLinks.length === 0) {
-                    console.log(`[MoviesMod] No episode ${episodeNum} found for ${quality} after parallel processing`);
-                    return [];
-                }
             }
 
             const finalStreamPromises = targetLinks.map(async (targetLink) => {
@@ -1130,184 +956,44 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
                     const { driveseedRedirectUrl } = targetLink;
                     if (!driveseedRedirectUrl) return null;
 
-                    // Process the cached driveseed redirect URL
-                    if (driveseedRedirectUrl.includes('driveseed.org')) {
-                        // First, resolve the driveseed redirect URL to get the final file page URL
-                        const response = await axios.get(driveseedRedirectUrl, {
-                            headers: {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                'Referer': 'https://links.modpro.blog/',
-                            }
-                        });
+                    const { downloadOptions, size, fileName } = await resolveDriveseedLink(driveseedRedirectUrl);
+                    
+                    if (!fileName || processedFileNames.has(fileName)) return null;
+                    processedFileNames.add(fileName);
 
-                        // Check for JavaScript redirect (window.location.replace)
-                        const redirectMatch = response.data.match(/window\.location\.replace\("([^"]+)"\)/);
+                    if (!downloadOptions || downloadOptions.length === 0) return null;
 
-                        let finalFilePageUrl = driveseedRedirectUrl;
-                        if (redirectMatch && redirectMatch[1]) {
-                            const finalPath = redirectMatch[1];
-                            finalFilePageUrl = `https://driveseed.org${finalPath}`;
-                            console.log(`[MoviesMod] Resolved redirect to final file page: ${finalFilePageUrl}`);
-                            
-                            // Load the final file page
-                            const finalResponse = await axios.get(finalFilePageUrl, {
-                                headers: {
-                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                    'Referer': driveseedRedirectUrl,
-                                }
-                            });
-                            
-                            var $ = cheerio.load(finalResponse.data);
-                        } else {
-                            var $ = cheerio.load(response.data);
-                        }
-
-                        // Extract file size and name information
-                        let driveseedSize = 'Unknown';
-                        let fileName = null;
-
-                        const sizeElement = $('li.list-group-item:contains("Size :")').text();
-                        if (sizeElement) {
-                            const sizeMatch = sizeElement.match(/Size\s*:\s*([0-9.,]+\s*[KMGT]B)/);
-                            if (sizeMatch) {
-                                driveseedSize = sizeMatch[1];
-                            }
-                        }
-
-                        const nameElement = $('li.list-group-item:contains("Name :")');
-                        if (nameElement.length > 0) {
-                            fileName = nameElement.text().replace('Name :', '').trim();
-                        } else {
-                            const h5Title = $('div.card-header h5').clone().children().remove().end().text().trim();
-                            if (h5Title) {
-                                fileName = h5Title.replace(/\[.*\]/, '').trim();
-                            }
-                        }
-
-                        // Extract download options
-                        const downloadOptions = [];
-
-                        // Find Resume Cloud button (primary)
-                        const resumeCloudLink = $('a:contains("Resume Cloud")').attr('href');
-                        if (resumeCloudLink) {
-                            downloadOptions.push({
-                                title: 'Resume Cloud',
-                                type: 'resume',
-                                url: `https://driveseed.org${resumeCloudLink}`,
-                                priority: 1
-                            });
-                        }
-
-                        // Find Resume Worker Bot (fallback)
-                        const workerSeedLink = $('a:contains("Resume Worker Bot")').attr('href');
-                        if (workerSeedLink) {
-                            downloadOptions.push({
-                                title: 'Resume Worker Bot',
-                                type: 'worker',
-                                url: workerSeedLink,
-                                priority: 2
-                            });
-                        }
-
-                        // Find Instant Download (final fallback)
-                        const instantDownloadLink = $('a:contains("Instant Download")').attr('href');
-                        if (instantDownloadLink) {
-                            downloadOptions.push({
-                                title: 'Instant Download',
-                                type: 'instant',
-                                url: instantDownloadLink,
-                                priority: 3
-                            });
-                        }
-
-                        // Sort by priority
-                        downloadOptions.sort((a, b) => a.priority - b.priority);
-
-                        if (fileName && processedFileNames.has(fileName)) {
-                            console.log(`[MoviesMod] Skipping duplicate file: ${fileName}`);
-                            return null;
-                        }
-                        if (fileName) processedFileNames.add(fileName);
-
-                        if (!downloadOptions || downloadOptions.length === 0) return null;
-
-                        // Try all download methods in parallel (racing approach)
-                        console.log(`[MoviesMod] Racing ${downloadOptions.length} download methods for ${quality}...`);
+                    const methodPromises = downloadOptions.map(async (option) => {
+                        let finalDownloadUrl = null;
+                        if (option.type === 'resume') finalDownloadUrl = await resolveResumeCloudLink(option.url);
+                        else if (option.type === 'worker') finalDownloadUrl = await resolveWorkerSeedLink(option.url);
+                        else if (option.type === 'instant') finalDownloadUrl = await resolveVideoSeedLink(option.url);
                         
-                        const methodPromises = downloadOptions.map(async (option) => {
-                            try {
-                                console.log(`[MoviesMod] Racing ${option.title} for ${quality}...`);
-                                let finalDownloadUrl = null;
-
-                                if (option.type === 'resume') {
-                                    finalDownloadUrl = await resolveResumeCloudLink(option.url);
-                                } else if (option.type === 'worker') {
-                                    finalDownloadUrl = await resolveWorkerSeedLink(option.url);
-                                } else if (option.type === 'instant') {
-                                    finalDownloadUrl = await resolveVideoSeedLink(option.url);
-                                }
-
-                                if (finalDownloadUrl) {
-                                    // Validate the URL before using it
-                                    const isValid = await validateVideoUrl(finalDownloadUrl);
-                                    if (isValid) {
-                                        console.log(`[MoviesMod] ✓ ${option.title} won the race for ${quality}`);
-                                        return { 
-                                            url: finalDownloadUrl, 
-                                            method: option.title, 
-                                            priority: option.priority || 999,
-                                            success: true 
-                                        };
-                                    } else {
-                                        console.log(`[MoviesMod] ✗ ${option.title} returned invalid URL in race`);
-                                        return { success: false, method: option.title, error: 'Invalid URL' };
-                                    }
-                                } else {
-                                    console.log(`[MoviesMod] ✗ ${option.title} failed to resolve URL in race`);
-                                    return { success: false, method: option.title, error: 'No URL resolved' };
-                                }
-                            } catch (error) {
-                                console.log(`[MoviesMod] ✗ ${option.title} threw error in race: ${error.message}`);
-                                return { success: false, method: option.title, error: error.message };
-                            }
-                        });
-
-                        // Race all methods, get first successful one with highest priority
-                        const results = await Promise.allSettled(methodPromises);
-                        const successful = results
-                            .filter(r => r.status === 'fulfilled' && r.value.success)
-                            .map(r => r.value)
-                            .sort((a, b) => a.priority - b.priority); // Prefer higher priority (lower number)
-
-                        let selectedResult = null;
-                        if (successful.length > 0) {
-                            selectedResult = successful[0];
-                            console.log(`[MoviesMod] ✓ Parallel race winner: ${selectedResult.method} for ${quality}`);
-                        } else {
-                            console.log(`[MoviesMod] ✗ All ${downloadOptions.length} methods failed in parallel race for ${quality}`);
+                        if (finalDownloadUrl && await validateVideoUrl(finalDownloadUrl)) {
+                            return { url: finalDownloadUrl, method: option.title, priority: option.priority, success: true };
                         }
+                        return { success: false, method: option.title };
+                    });
+                    
+                    const raceResults = await Promise.allSettled(methodPromises);
+                    const successful = raceResults
+                        .filter(r => r.status === 'fulfilled' && r.value.success)
+                        .map(r => r.value)
+                        .sort((a, b) => a.priority - b.priority);
 
-                        if (!selectedResult) {
-                            console.log(`[MoviesMod] ✗ All download methods failed for ${quality}`);
-                            return null;
-                        }
+                    if (successful.length === 0) return null;
+                    const selectedResult = successful[0];
 
-                        let actualQuality = extractQuality(quality);
-                        const sizeInfo = driveseedSize || quality.match(/\[([^\]]+)\]/)?.[1];
-                        const cleanFileName = fileName ? fileName.replace(/\.[^/.]+$/, "").replace(/[._]/g, ' ') : `Stream from ${quality}`;
-                        const techDetails = getTechDetails(quality);
-                        const techDetailsString = techDetails.length > 0 ? ` • ${techDetails.join(' • ')}` : '';
+                    const actualQuality = extractQuality(quality);
+                    const techDetails = getTechDetails(quality);
+                    const techDetailsString = techDetails.length > 0 ? ` • ${techDetails.join(' • ')}` : '';
 
-                        return {
-                            name: `MoviesMod\n${actualQuality}`,
-                            title: `${cleanFileName}\n${sizeInfo || ''}${techDetailsString}`,
-                            url: selectedResult.url,
-                            quality: actualQuality,
-                        };
-                    } else {
-                        console.warn(`[MoviesMod] Unsupported URL type for final processing: ${currentUrl}`);
-                        return null;
-                    }
+                    return {
+                        name: `MoviesMod\n${actualQuality}`,
+                        title: `${fileName.replace(/\.[^/.]+$/, "").replace(/[._]/g, ' ')}\n${size || ''}${techDetailsString}`,
+                        url: selectedResult.url,
+                        quality: actualQuality,
+                    };
                 } catch (e) {
                     console.error(`[MoviesMod] Error processing target link ${targetLink.url}: ${e.message}`);
                     return null;
@@ -1320,18 +1006,15 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
         const allResults = await Promise.all(qualityProcessingPromises);
         allResults.flat().forEach(s => streams.push(s));
 
-        // Sort by quality descending
-        streams.sort((a, b) => {
-            const qualityA = parseQualityForSort(a.quality);
-            const qualityB = parseQualityForSort(b.quality);
-            return qualityB - qualityA;
-        });
+        streams.sort((a, b) => parseQualityForSort(b.quality) - parseQualityForSort(a.quality));
 
         console.log(`[MoviesMod] Successfully extracted and sorted ${streams.length} streams`);
         return streams;
 
-    console.log(`[MoviesMod] Successfully extracted ${streams.length} streams`);
-    return streams;
+    } catch (error) {
+        console.error(`[MoviesMod] CRITICAL ERROR in getMoviesModStreams: ${error.message}\n${error.stack}`);
+        return []; // Return empty array on any failure
+    }
 }
 
 module.exports = {
