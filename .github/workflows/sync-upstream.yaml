@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # We need a PAT here to push and to trigger the next workflow
+          # A PAT is still recommended for this method
           token: ${{ secrets.PAT }}
           fetch-depth: 0
 
@@ -45,13 +45,16 @@ jobs:
         id: post_sync
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Check for changes and trigger Docker build
-        # This step only runs if the commit hash has changed
+      # --- THIS IS THE CORRECTED STEP ---
+      - name: Trigger Docker Build on Change
         if: steps.pre_sync.outputs.sha != steps.post_sync.outputs.sha
-        uses: benc-uk/workflow-dispatch-action@v1
-        with:
-          workflow: Build and Push Docker Image  # Name of the workflow file to trigger
-          token: ${{ secrets.PAT }}
+        env:
+          # The GITHUB_TOKEN is a special secret that is automatically created and provided.
+          # For cross-workflow triggers, your PAT is more reliable.
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          echo "Changes detected. Triggering the Docker build workflow..."
+          gh workflow run "Build and Push Docker Image" --ref ${{ github.ref_name }}
 
       - name: Report no changes
         if: steps.pre_sync.outputs.sha == steps.post_sync.outputs.sha
