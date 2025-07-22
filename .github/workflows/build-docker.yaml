@@ -6,7 +6,7 @@ on:
   # We keep the push trigger in case you push manual commits to master
 #  push:
 #    branches:
-3      - master
+#      - master
 
 env:
   DOCKER_REPO_NAME: nuviostreams
