@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: DockerBuild
 
 on:
   # This workflow is now triggered manually OR by the API call from the sync workflow
