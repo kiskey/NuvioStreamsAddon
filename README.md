@@ -74,7 +74,7 @@ Nuvio Streams is a powerful Stremio addon that provides direct HTTP streaming li
 
 ### Key Features
 
-* **🌐 Multiple Providers** - ShowBox, SoaperTV, VidSrc, Cuevana
+* **🌐 Multiple Providers** - ShowBox, SoaperTV, VidSrc, VidZee, MP4Hydra, UHDMovies, MoviesMod, DramaDrip, TopMovies, AnimePahe
 * **⚡ Personal Cookie Support** - Get your own quota and access to 4K/HDR content
 * **🎯 Quality Filtering** - Set minimum quality requirements
 * **🔒 No P2P/Torrents** - Only direct HTTP streams
@@ -96,8 +96,8 @@ Nuvio Streams is a powerful Stremio addon that provides direct HTTP streaming li
 
 **🌍 Current Public Instance:** [https://nuviostreams.hayd.uk](https://nuviostreams.hayd.uk)
 
-* ✅ Includes ShowBox and SoaperTV providers
-* ❌ Cuevana isn't available on public instances 
+* ✅ Includes ShowBox, SoaperTV, VidSrc, VidZee, MP4Hydra, UHDMovies, MoviesMod, DramaDrip, TopMovies, and AnimePahe providers
+
 * 💡 For the most reliable experience, consider self-hosting your own instance
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -157,6 +157,38 @@ Available only for self-hosted instances. Requires unique IP for optimal functio
 Two-step process:
 1. **Main Addon** - Gathers TMDB information
 2. **Hianime Service** - Communicates with Hianime API
+
+### AnimePahe
+
+AnimePahe provider offers high-quality anime streams with both SUB and DUB options:
+
+1. Enable AnimePahe in addon configuration
+2. Uses a proxy by default to bypass regional restrictions
+3. Supports custom cookies for better performance
+4. Configure proxy URL in `.env` file if needed
+
+### External Provider Services
+
+For improved performance and scalability, certain providers (UHDMovies, DramaDrip, TopMovies, MoviesMod) can be deployed as separate microservices:
+
+**Benefits:**
+* Reduced main addon load
+* Independent scaling
+* Isolated provider failures
+* Better resource management
+
+**Setup:**
+1. Deploy the `provider-service` directory as a separate service
+2. Configure external URLs in your main addon's `.env`:
+   ```env
+   EXTERNAL_UHDMOVIES_URL=https://your-provider-service.com
+   EXTERNAL_DRAMADRIP_URL=https://your-provider-service.com
+   EXTERNAL_TOPMOVIES_URL=https://your-provider-service.com
+   EXTERNAL_MOVIESMOD_URL=https://your-provider-service.com
+   ```
+3. Leave URLs empty to use local providers (default behavior)
+
+**Fallback:** If external service fails, the addon automatically falls back to local providers.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -239,4 +271,4 @@ Distributed under the MIT License. See `LICENSE` for more information.
 [Express.js]: https://img.shields.io/badge/Express.js-404D59?style=for-the-badge&logo=express&logoColor=white
 [Express-url]: https://expressjs.com/
 [JavaScript]: https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black
-[JavaScript-url]: https://developer.mozilla.org/en-US/docs/Web/JavaScript 
+[JavaScript-url]: https://developer.mozilla.org/en-US/docs/Web/JavaScript

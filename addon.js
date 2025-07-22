@@ -34,20 +34,27 @@ if (USE_REDIS_CACHE) {
         if (!process.env.REDIS_URL) {
             throw new Error("REDIS_URL environment variable is not set or is empty.");
         }
+        
+        // Check if this is a local Redis instance or remote
+        const isLocal = process.env.REDIS_URL.includes('localhost') || process.env.REDIS_URL.includes('127.0.0.1');
+        
         redis = new Redis(process.env.REDIS_URL, {
             maxRetriesPerRequest: 5,
             retryStrategy(times) {
                 const delay = Math.min(times * 500, 5000);
+                // Added verbose logging for each retry attempt
+                console.warn(`[Redis Cache] Retry strategy activated. Attempt #${times}, will retry in ${delay}ms`);
                 return delay;
             },
             reconnectOnError: function(err) {
                 const targetError = 'READONLY';
-                if (err.message.includes(targetError)) {
-                    return true;
-                }
-                return false;
+                const shouldReconnect = err.message.includes(targetError);
+                // Added detailed logging for reconnectOnError decisions
+                console.warn(`[Redis Cache] reconnectOnError invoked due to error: "${err.message}". Decided to reconnect: ${shouldReconnect}`);
+                return shouldReconnect;
             },
-            tls: {},
+            // TLS is optional - only use if explicitly specified with rediss:// protocol
+            tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
             enableOfflineQueue: true,
             enableReadyCheck: true,
             autoResubscribe: true,
@@ -85,6 +92,21 @@ if (USE_REDIS_CACHE) {
             // --- END: Redis Keep-Alive ---
         });
         
+        // --- BEGIN: Additional Redis connection lifecycle logging ---
+        redis.on('reconnecting', (delay) => {
+            console.warn(`[Redis Cache] Reconnecting... next attempt in ${delay}ms (current status: ${redis.status})`);
+        });
+        redis.on('close', () => {
+            console.warn('[Redis Cache] Connection closed.');
+        });
+        redis.on('end', () => {
+            console.error('[Redis Cache] Connection ended. No further reconnection attempts will be made.');
+        });
+        redis.on('ready', () => {
+            console.log('[Redis Cache] Connection is ready and commands can now be processed.');
+        });
+        // --- END: Additional Redis connection lifecycle logging ---
+        
         console.log('[Redis Cache] Upstash Redis client initialized');
     } catch (err) {
         console.error(`[Redis Cache] Failed to initialize Redis: ${err.message}`);
@@ -120,13 +142,46 @@ console.log(`[addon.js] HiAnime provider fetching enabled: ${ENABLE_HIANIME_PROV
 const ENABLE_UHDMOVIES_PROVIDER = process.env.ENABLE_UHDMOVIES_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
 console.log(`[addon.js] UHDMovies provider fetching enabled: ${ENABLE_UHDMOVIES_PROVIDER}`);
 
+// NEW: Read environment variable for AnimePahe
+const ENABLE_ANIMEPAHE_PROVIDER = process.env.ENABLE_ANIMEPAHE_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
+console.log(`[addon.js] AnimePahe provider fetching enabled: ${ENABLE_ANIMEPAHE_PROVIDER}`);
+
 // NEW: Read environment variable for MoviesMod
 const ENABLE_MOVIESMOD_PROVIDER = process.env.ENABLE_MOVIESMOD_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
 console.log(`[addon.js] MoviesMod provider fetching enabled: ${ENABLE_MOVIESMOD_PROVIDER}`);
 
+// NEW: Read environment variable for TopMovies
+const ENABLE_TOPMOVIES_PROVIDER = process.env.ENABLE_TOPMOVIES_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
+console.log(`[addon.js] TopMovies provider fetching enabled: ${ENABLE_TOPMOVIES_PROVIDER}`);
+
+// NEW: Read environment variable for SoaperTV
+const ENABLE_SOAPERTV_PROVIDER = process.env.ENABLE_SOAPERTV_PROVIDER !== 'false'; // Defaults to true
+console.log(`[addon.js] SoaperTV provider fetching enabled: ${ENABLE_SOAPERTV_PROVIDER}`);
+
+// NEW: Read environment variable for DramaDrip
+const ENABLE_DRAMADRIP_PROVIDER = process.env.ENABLE_DRAMADRIP_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
+console.log(`[addon.js] DramaDrip provider fetching enabled: ${ENABLE_DRAMADRIP_PROVIDER}`);
+
+// External provider service configuration
+const USE_EXTERNAL_PROVIDERS = process.env.USE_EXTERNAL_PROVIDERS === 'true';
+const EXTERNAL_UHDMOVIES_URL = USE_EXTERNAL_PROVIDERS ? process.env.EXTERNAL_UHDMOVIES_URL : null;
+const EXTERNAL_DRAMADRIP_URL = USE_EXTERNAL_PROVIDERS ? process.env.EXTERNAL_DRAMADRIP_URL : null;
+const EXTERNAL_TOPMOVIES_URL = USE_EXTERNAL_PROVIDERS ? process.env.EXTERNAL_TOPMOVIES_URL : null;
+const EXTERNAL_MOVIESMOD_URL = USE_EXTERNAL_PROVIDERS ? process.env.EXTERNAL_MOVIESMOD_URL : null;
+
+console.log(`[addon.js] External providers: ${USE_EXTERNAL_PROVIDERS ? 'enabled' : 'disabled'}`);
+if (USE_EXTERNAL_PROVIDERS) {
+    console.log(`[addon.js] External UHDMovies URL: ${EXTERNAL_UHDMOVIES_URL || 'Not configured (using local)'}`); 
+    console.log(`[addon.js] External DramaDrip URL: ${EXTERNAL_DRAMADRIP_URL || 'Not configured (using local)'}`); 
+    console.log(`[addon.js] External TopMovies URL: ${EXTERNAL_TOPMOVIES_URL || 'Not configured (using local)'}`); 
+    console.log(`[addon.js] External MoviesMod URL: ${EXTERNAL_MOVIESMOD_URL || 'Not configured (using local)'}`); 
+} else {
+    console.log(`[addon.js] All providers will use local implementations`);
+}
+
 // NEW: Stream caching config
 const STREAM_CACHE_DIR = process.env.VERCEL ? path.join('/tmp', '.streams_cache') : path.join(__dirname, '.streams_cache');
-const STREAM_CACHE_TTL_MS = 9 * 60 * 1000; // 9 minutes
+const STREAM_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const ENABLE_STREAM_CACHE = process.env.DISABLE_STREAM_CACHE !== 'true'; // Enabled by default
 console.log(`[addon.js] Stream links caching ${ENABLE_STREAM_CACHE ? 'enabled' : 'disabled'}`);
 console.log(`[addon.js] Redis caching ${redis ? 'available' : 'not available'}`);
@@ -141,6 +196,54 @@ const { getVidZeeStreams } = require('./providers/VidZee.js'); // NEW: Import fr
 const { getMP4HydraStreams } = require('./providers/MP4Hydra.js'); // NEW: Import from MP4Hydra.js
 const { getUHDMoviesStreams } = require('./providers/uhdmovies.js'); // NEW: Import from uhdmovies.js
 const { getMoviesModStreams } = require('./providers/moviesmod.js'); // NEW: Import from moviesmod.js
+const { getTopMoviesStreams } = require('./providers/topmovies.js'); // NEW: Import from topmovies.js
+const { getDramaDripStreams } = require('./providers/dramadrip.js'); // NEW: Import from dramadrip.js
+const { getAnimePaheStreams } = require('./providers/animepahe.js'); // NEW: Import from animepahe.js
+const axios = require('axios'); // For external provider requests
+
+// Helper function to make requests to external provider services
+async function fetchFromExternalProvider(baseUrl, providerName, tmdbId, type, season = null, episode = null) {
+    try {
+        const endpoint = `/api/streams/${providerName.toLowerCase()}/${tmdbId}`;
+        const url = `${baseUrl.replace(/\/$/, '')}${endpoint}`;
+        
+        // Build query parameters
+        const queryParams = new URLSearchParams({ type });
+        if (season !== null) queryParams.append('season', season);
+        if (episode !== null) queryParams.append('episode', episode);
+        
+        const fullUrl = `${url}?${queryParams.toString()}`;
+        console.log(`[External Provider] Making request to: ${fullUrl}`);
+        
+        const response = await axios.get(fullUrl, {
+            timeout: 30000, // 30 second timeout
+            headers: {
+                'User-Agent': 'NuvioStreamsAddon/1.0'
+            }
+        });
+        
+        if (response.data && response.data.success) {
+            return response.data.streams || [];
+        } else {
+            console.error(`[External Provider] Request failed:`, response.data?.error || 'Unknown error');
+            return [];
+        }
+    } catch (error) {
+        console.error(`[External Provider] Error making request to ${baseUrl}/api/streams/${providerName.toLowerCase()}/${tmdbId}:`, error.message);
+        return [];
+    }
+}
+
+// --- Analytics Configuration ---
+const GA_MEASUREMENT_ID = process.env.GA_MEASUREMENT_ID;
+const GA_API_SECRET = process.env.GA_API_SECRET;
+const ANALYTICS_ENABLED = GA_MEASUREMENT_ID && GA_API_SECRET;
+
+if (ANALYTICS_ENABLED) {
+    console.log(`[Analytics] GA4 Measurement Protocol is enabled. Tracking to ID: ${GA_MEASUREMENT_ID}`);
+} else {
+    console.log('[Analytics] GA4 Measurement Protocol is disabled. Set GA_MEASUREMENT_ID and GA_API_SECRET to enable.');
+}
 
 // --- Constants ---
 const TMDB_API_URL = 'https://api.themoviedb.org/3';
@@ -194,6 +297,7 @@ function parseQuality(qualityString) {
     if (q.includes('dvdscr')) return 350;
     if (q.includes('r5') || q.includes('r6')) return 400;
 
+    if (q.includes('org')) return 4320; // Treat original uploads as higher than 4K
 
     return 0; // Default for anything else not recognized
 }
@@ -243,6 +347,56 @@ function filterStreamsByQuality(streams, minQualitySetting, providerName) {
     return filteredStreams;
 }
 
+// NEW: Helper function to filter streams by excluding specific codecs
+function filterStreamsByCodecs(streams, excludeCodecSettings, providerName) {
+    if (!excludeCodecSettings || Object.keys(excludeCodecSettings).length === 0) {
+        console.log(`[${providerName}] No codec exclusions applied.`);
+        return streams; // No filtering needed
+    }
+
+    const excludeDV = excludeCodecSettings.excludeDV === true;
+    const excludeHDR = excludeCodecSettings.excludeHDR === true;
+
+    if (!excludeDV && !excludeHDR) {
+        console.log(`[${providerName}] No codec exclusions enabled.`);
+        return streams;
+    }
+
+    console.log(`[${providerName}] Filtering streams. Exclude DV: ${excludeDV}, Exclude HDR: ${excludeHDR}. Original count: ${streams.length}`);
+
+    const filteredStreams = streams.filter(stream => {
+        if (!stream.codecs || !Array.isArray(stream.codecs)) {
+            return true; // Keep streams without codec information
+        }
+
+        // Check for DV exclusion
+        if (excludeDV && stream.codecs.includes('DV')) {
+            console.log(`[${providerName}] Excluding stream with DV codec: ${stream.title || stream.url}`);
+            return false;
+        }
+
+        // Check for HDR exclusion (including HDR, HDR10, HDR10+)
+        if (excludeHDR && (stream.codecs.includes('HDR') || stream.codecs.includes('HDR10') || stream.codecs.includes('HDR10+'))) {
+            console.log(`[${providerName}] Excluding stream with HDR codec: ${stream.title || stream.url}`);
+            return false;
+        }
+
+        return true; // Keep the stream
+    });
+
+    console.log(`[${providerName}] After codec filtering count: ${filteredStreams.length}`);
+    return filteredStreams;
+}
+
+// NEW: Helper function that combines both quality and codec filtering
+function applyAllStreamFilters(streams, providerName, minQualitySetting, excludeCodecSettings) {
+    // Apply quality filtering first
+    let filteredStreams = filterStreamsByQuality(streams, minQualitySetting, providerName);
+    // Then apply codec filtering
+    filteredStreams = filterStreamsByCodecs(filteredStreams, excludeCodecSettings, providerName);
+    return filteredStreams;
+}
+
 async function fetchWithRetry(url, options, maxRetries = MAX_RETRIES) {
     const { default: fetchFunction } = await import('node-fetch'); // Dynamically import
     let lastError;
@@ -267,6 +421,41 @@ async function fetchWithRetry(url, options, maxRetries = MAX_RETRIES) {
     }
     console.error(`All fetch attempts failed for ${url}. Last error:`, lastError.message);
     throw lastError;
+}
+
+// --- NEW: Google Analytics Event Sending Function ---
+async function sendAnalyticsEvent(eventName, eventParams) {
+    if (!ANALYTICS_ENABLED) {
+        return;
+    }
+
+    // Use a dynamically generated client_id for each event to ensure anonymity
+    const clientId = crypto.randomBytes(16).toString("hex");
+
+    const analyticsData = {
+        client_id: clientId,
+        events: [{
+            name: eventName,
+            params: {
+                // GA4 standard parameters for better reporting
+                session_id: crypto.randomBytes(16).toString("hex"),
+                engagement_time_msec: '100',
+                ...eventParams
+            },
+        }],
+    };
+
+    try {
+        const { default: fetchFunction } = await import('node-fetch');
+        // Fire-and-forget: we don't need to wait for the response
+        fetchFunction(`https://www.google-analytics.com/mp/collect?measurement_id=${GA_MEASUREMENT_ID}&api_secret=${GA_API_SECRET}`, {
+            method: 'POST',
+            body: JSON.stringify(analyticsData),
+        });
+        console.log(`[Analytics] Sent event: ${eventName} for "${eventParams.content_title || 'N/A'}"`);
+    } catch (error) {
+        console.warn(`[Analytics] Failed to send event: ${error.message}`);
+    }
 }
 
 // Helper function for fetching with a timeout
@@ -572,6 +761,14 @@ builder.defineStreamHandler(async (args) => {
         console.log(`[addon.js] No minimum quality preferences set by user.`);
     }
 
+    // NEW: Get codec exclude preferences
+    const excludeCodecsPreferences = requestSpecificConfig.excludeCodecs || {};
+    if (Object.keys(excludeCodecsPreferences).length > 0) {
+        console.log(`[addon.js] Codec exclude preferences: ${JSON.stringify(excludeCodecsPreferences)}`);
+    } else {
+        console.log(`[addon.js] No codec exclude preferences set by user.`);
+    }
+
     console.log("--- FULL ARGS OBJECT (from SDK) ---");
     console.log(JSON.stringify(args, null, 2));
     console.log("--- SDK ARGS.CONFIG (still logging for comparison) ---");
@@ -705,6 +902,7 @@ builder.defineStreamHandler(async (args) => {
 
     let movieOrSeriesTitle = initialTitleFromConversion;
     let movieOrSeriesYear = null;
+    let seasonTitle = null;
 
     if (tmdbId && TMDB_API_KEY) {
         try {
@@ -729,6 +927,22 @@ builder.defineStreamHandler(async (args) => {
             }
             console.log(`  Fetched/Confirmed TMDB details: Title='${movieOrSeriesTitle}', Year='${movieOrSeriesYear}'`);
 
+            // NEW: Fetch season-specific title for TV shows
+            if (tmdbTypeFromId === 'tv' && seasonNum) {
+                const seasonDetailsUrl = `${TMDB_API_URL}/tv/${tmdbId}/season/${seasonNum}?api_key=${TMDB_API_KEY}&language=en-US`;
+                console.log(`Fetching season details from TMDB: ${seasonDetailsUrl}`);
+                try {
+                    const seasonDetailsResponse = await fetchWithRetry(seasonDetailsUrl, {});
+                    if (seasonDetailsResponse.ok) {
+                        const seasonDetails = await seasonDetailsResponse.json();
+                        seasonTitle = seasonDetails.name;
+                        console.log(`  Fetched season title: "${seasonTitle}"`);
+                    }
+                } catch (e) {
+                    console.warn(`Could not fetch season-specific title: ${e.message}`);
+                }
+            }
+
             // Check for Animation genre
             if (tmdbDetails.genres && Array.isArray(tmdbDetails.genres)) {
                 if (tmdbDetails.genres.some(genre => genre.name.toLowerCase() === 'animation')) {
@@ -744,6 +958,19 @@ builder.defineStreamHandler(async (args) => {
         console.warn("TMDB_API_KEY is not configured. Cannot fetch full title/year/genres. Hianime and Xprime.tv functionality might be limited or fail.");
     }
     
+    // --- Send Analytics Event ---
+    if (movieOrSeriesTitle) {
+        sendAnalyticsEvent('stream_request', {
+            content_type: tmdbTypeFromId,
+            content_id: tmdbId,
+            content_title: movieOrSeriesTitle,
+            content_year: movieOrSeriesYear || 'N/A',
+            selected_providers: selectedProvidersArray ? selectedProvidersArray.join(',') : 'all',
+            // Custom dimension for tracking if it's an animation
+            is_animation: isAnimation ? 'true' : 'false', 
+        });
+    }
+
     let combinedRawStreams = [];
 
     // --- Provider Selection Logic ---
@@ -933,6 +1160,10 @@ builder.defineStreamHandler(async (args) => {
 
         // SoaperTV provider with cache integration
         soapertv: async () => {
+            if (!ENABLE_SOAPERTV_PROVIDER) {
+                console.log('[SoaperTV] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
             if (!shouldFetch('soapertv')) {
                 console.log('[SoaperTV] Skipping fetch: Not selected by user.');
                 return [];
@@ -1213,7 +1444,16 @@ builder.defineStreamHandler(async (args) => {
             // No cache or expired, fetch fresh
             try {
                 console.log(`[UHDMovies] Fetching new streams...`);
-                const streams = await getUHDMoviesStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                let streams;
+                
+                // Check if external service URL is configured
+                if (EXTERNAL_UHDMOVIES_URL) {
+                    console.log(`[UHDMovies] Using external service: ${EXTERNAL_UHDMOVIES_URL}`);
+                    streams = await fetchFromExternalProvider(EXTERNAL_UHDMOVIES_URL, 'uhdmovies', tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                } else {
+                    console.log(`[UHDMovies] Using local provider`);
+                    streams = await getUHDMoviesStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                }
                 
                 if (streams && streams.length > 0) {
                     console.log(`[UHDMovies] Successfully fetched ${streams.length} streams.`);
@@ -1255,7 +1495,16 @@ builder.defineStreamHandler(async (args) => {
             // No cache or expired, fetch fresh
             try {
                 console.log(`[MoviesMod] Fetching new streams...`);
-                const streams = await getMoviesModStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                let streams;
+                
+                // Check if external service URL is configured
+                if (EXTERNAL_MOVIESMOD_URL) {
+                    console.log(`[MoviesMod] Using external service: ${EXTERNAL_MOVIESMOD_URL}`);
+                    streams = await fetchFromExternalProvider(EXTERNAL_MOVIESMOD_URL, 'moviesmod', tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                } else {
+                    console.log(`[MoviesMod] Using local provider`);
+                    streams = await getMoviesModStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                }
                 
                 if (streams && streams.length > 0) {
                     console.log(`[MoviesMod] Successfully fetched ${streams.length} streams.`);
@@ -1272,6 +1521,140 @@ builder.defineStreamHandler(async (args) => {
                 console.error(`[MoviesMod] Error fetching streams:`, err.message);
                 // Save error status to cache
                 await saveStreamToCache('moviesmod', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
+                return [];
+            }
+        },
+
+        // TopMovies provider with cache integration
+        topmovies: async () => {
+            if (!ENABLE_TOPMOVIES_PROVIDER) {
+                console.log('[TopMovies] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
+            if (!shouldFetch('topmovies')) {
+                console.log('[TopMovies] Skipping fetch: Not selected by user.');
+                return [];
+            }
+            
+            // This provider only supports movies
+            if (tmdbTypeFromId !== 'movie') {
+                console.log('[TopMovies] Skipping fetch: Provider only supports movies.');
+                return [];
+            }
+
+            // Try to get cached streams first
+            const cachedStreams = await getStreamFromCache('topmovies', tmdbTypeFromId, tmdbId);
+            if (cachedStreams) {
+                console.log(`[TopMovies] Using ${cachedStreams.length} streams from cache.`);
+                return cachedStreams.map(stream => ({ ...stream, provider: 'TopMovies' }));
+            }
+            
+            // No cache or expired, fetch fresh
+            try {
+                console.log(`[TopMovies] Fetching new streams...`);
+                let streams;
+                
+                // Check if external service URL is configured
+                if (EXTERNAL_TOPMOVIES_URL) {
+                    console.log(`[TopMovies] Using external service: ${EXTERNAL_TOPMOVIES_URL}`);
+                    streams = await fetchFromExternalProvider(EXTERNAL_TOPMOVIES_URL, 'topmovies', tmdbId, tmdbTypeFromId);
+                } else {
+                    console.log(`[TopMovies] Using local provider`);
+                    streams = await getTopMoviesStreams(tmdbId, tmdbTypeFromId);
+                }
+                
+                if (streams && streams.length > 0) {
+                    console.log(`[TopMovies] Successfully fetched ${streams.length} streams.`);
+                    // Save to cache
+                    await saveStreamToCache('topmovies', tmdbTypeFromId, tmdbId, streams, 'ok');
+                    return streams.map(stream => ({ ...stream, provider: 'TopMovies' }));
+                } else {
+                    console.log(`[TopMovies] No streams returned.`);
+                    // Save empty result
+                    await saveStreamToCache('topmovies', tmdbTypeFromId, tmdbId, [], 'failed');
+                    return [];
+                }
+            } catch (err) {
+                console.error(`[TopMovies] Error fetching streams:`, err.message);
+                // Save error status to cache
+                await saveStreamToCache('topmovies', tmdbTypeFromId, tmdbId, [], 'failed');
+                return [];
+            }
+        },
+
+        // DramaDrip provider with cache integration
+        dramadrip: async () => {
+            if (!ENABLE_DRAMADRIP_PROVIDER) {
+                console.log('[DramaDrip] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
+            if (!shouldFetch('dramadrip')) {
+                console.log('[DramaDrip] Skipping fetch: Not selected by user.');
+                return [];
+            }
+
+            // Try to get cached streams first
+            const cachedStreams = await getStreamFromCache('dramadrip', tmdbTypeFromId, tmdbId, seasonNum, episodeNum);
+            if (cachedStreams) {
+                console.log(`[DramaDrip] Using ${cachedStreams.length} streams from cache.`);
+                return cachedStreams.map(stream => ({ ...stream, provider: 'DramaDrip' }));
+            }
+            
+            // No cache or expired, fetch fresh
+            try {
+                console.log(`[DramaDrip] Fetching new streams...`);
+                let streams;
+                
+                // Check if external service URL is configured
+                if (EXTERNAL_DRAMADRIP_URL) {
+                    console.log(`[DramaDrip] Using external service: ${EXTERNAL_DRAMADRIP_URL}`);
+                    streams = await fetchFromExternalProvider(EXTERNAL_DRAMADRIP_URL, 'dramadrip', tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                } else {
+                    console.log(`[DramaDrip] Using local provider`);
+                    streams = await getDramaDripStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                }
+                
+                if (streams && streams.length > 0) {
+                    console.log(`[DramaDrip] Successfully fetched ${streams.length} streams.`);
+                    await saveStreamToCache('dramadrip', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum);
+                    return streams.map(stream => ({ ...stream, provider: 'DramaDrip' }));
+                } else {
+                    console.log(`[DramaDrip] No streams returned.`);
+                    await saveStreamToCache('dramadrip', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
+                    return [];
+                }
+            } catch (err) {
+                console.error(`[DramaDrip] Error fetching streams:`, err.message);
+                await saveStreamToCache('dramadrip', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
+                return [];
+            }
+        },
+
+        // AnimePahe provider with internal caching
+        animepahe: async () => {
+            if (!ENABLE_ANIMEPAHE_PROVIDER) {
+                console.log('[AnimePahe] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
+            if (!shouldFetch('animepahe') || !isAnimation || !movieOrSeriesTitle || !movieOrSeriesYear) {
+                if (!shouldFetch('animepahe')) {
+                    console.log('[AnimePahe] Skipping fetch: Not selected by user.');
+                } else if (!isAnimation) {
+                    console.log('[AnimePahe] Skipping fetch: Content is not identified as Animation.');
+                } else {
+                    console.log('[AnimePahe] Skipping fetch: Missing title or year data.');
+                }
+                return [];
+            }
+
+            try {
+                const useAnimePaheProxy = process.env.ANIMEPAHE_USE_PROXY !== 'false';
+                console.log(`[AnimePahe] Proxy usage: ${useAnimePaheProxy}`);
+
+                const streams = await getAnimePaheStreams(tmdbId, movieOrSeriesTitle, tmdbTypeFromId, seasonNum, episodeNum, seasonTitle);
+                return streams.map(stream => ({ ...stream, provider: 'AnimePahe' }));
+            } catch (err) {
+                console.error(`[AnimePahe] Error fetching streams:`, err.message);
                 return [];
             }
         }
@@ -1292,43 +1675,49 @@ builder.defineStreamHandler(async (args) => {
             timeProvider('VidSrc', providerFetchFunctions.vidsrc()),
             timeProvider('VidZee', providerFetchFunctions.vidzee()),
             timeProvider('MP4Hydra', providerFetchFunctions.mp4hydra()),
-            timeProvider('UHDMovies', providerFetchFunctions.uhdmovies()), // NEW: Add UHDMovies provider
-            timeProvider('MoviesMod', providerFetchFunctions.moviesmod()) // NEW: Add MoviesMod provider
+            timeProvider('UHDMovies', providerFetchFunctions.uhdmovies()), 
+            timeProvider('MoviesMod', providerFetchFunctions.moviesmod()),
+            timeProvider('TopMovies', providerFetchFunctions.topmovies()),
+            timeProvider('DramaDrip', providerFetchFunctions.dramadrip()),
+            timeProvider('AnimePahe', providerFetchFunctions.animepahe())
         ]);
         
         // Process results into streamsByProvider object
         const streamsByProvider = {
-            'ShowBox': shouldFetch('showbox') ? filterStreamsByQuality(providerResults[0], minQualitiesPreferences.showbox, 'ShowBox') : [],
-            'Xprime.tv': ENABLE_XPRIME_PROVIDER && shouldFetch('xprime') ? filterStreamsByQuality(providerResults[1], minQualitiesPreferences.xprime, 'Xprime.tv') : [],
-            'HollyMovieHD': ENABLE_HOLLYMOVIEHD_PROVIDER && shouldFetch('hollymoviehd') ? filterStreamsByQuality(providerResults[2], minQualitiesPreferences.hollymoviehd, 'HollyMovieHD') : [],
-            'Soaper TV': shouldFetch('soapertv') ? filterStreamsByQuality(providerResults[3], minQualitiesPreferences.soapertv, 'Soaper TV') : [],
-            'Cuevana': ENABLE_CUEVANA_PROVIDER && shouldFetch('cuevana') ? filterStreamsByQuality(providerResults[4], minQualitiesPreferences.cuevana, 'Cuevana') : [],
-            'Hianime': shouldFetch('hianime') ? filterStreamsByQuality(providerResults[5], minQualitiesPreferences.hianime, 'Hianime') : [],
-            'VidSrc': shouldFetch('vidsrc') ? filterStreamsByQuality(providerResults[6], minQualitiesPreferences.vidsrc, 'VidSrc') : [],
-            'VidZee': ENABLE_VIDZEE_PROVIDER && shouldFetch('vidzee') ? filterStreamsByQuality(providerResults[7], minQualitiesPreferences.vidzee, 'VidZee') : [],
-            'MP4Hydra': ENABLE_MP4HYDRA_PROVIDER && shouldFetch('mp4hydra') ? filterStreamsByQuality(providerResults[8], minQualitiesPreferences.mp4hydra, 'MP4Hydra') : [],
-            'UHDMovies': ENABLE_UHDMOVIES_PROVIDER && shouldFetch('uhdmovies') ? filterStreamsByQuality(providerResults[9], minQualitiesPreferences.uhdmovies, 'UHDMovies') : [], // NEW: Add UHDMovies provider
-            'MoviesMod': ENABLE_MOVIESMOD_PROVIDER && shouldFetch('moviesmod') ? filterStreamsByQuality(providerResults[10], minQualitiesPreferences.moviesmod, 'MoviesMod') : [] // NEW: Add MoviesMod provider
+            'ShowBox': shouldFetch('showbox') ? applyAllStreamFilters(providerResults[0], 'ShowBox', minQualitiesPreferences.showbox, excludeCodecsPreferences.showbox) : [],
+            'Xprime.tv': ENABLE_XPRIME_PROVIDER && shouldFetch('xprime') ? applyAllStreamFilters(providerResults[1], 'Xprime.tv', minQualitiesPreferences.xprime, excludeCodecsPreferences.xprime) : [],
+            'HollyMovieHD': ENABLE_HOLLYMOVIEHD_PROVIDER && shouldFetch('hollymoviehd') ? applyAllStreamFilters(providerResults[2], 'HollyMovieHD', minQualitiesPreferences.hollymoviehd, excludeCodecsPreferences.hollymoviehd) : [],
+            'Soaper TV': ENABLE_SOAPERTV_PROVIDER && shouldFetch('soapertv') ? applyAllStreamFilters(providerResults[3], 'Soaper TV', minQualitiesPreferences.soapertv, excludeCodecsPreferences.soapertv) : [],
+            'Cuevana': ENABLE_CUEVANA_PROVIDER && shouldFetch('cuevana') ? applyAllStreamFilters(providerResults[4], 'Cuevana', minQualitiesPreferences.cuevana, excludeCodecsPreferences.cuevana) : [],
+            'Hianime': shouldFetch('hianime') ? applyAllStreamFilters(providerResults[5], 'Hianime', minQualitiesPreferences.hianime, excludeCodecsPreferences.hianime) : [],
+            'VidSrc': shouldFetch('vidsrc') ? applyAllStreamFilters(providerResults[6], 'VidSrc', minQualitiesPreferences.vidsrc, excludeCodecsPreferences.vidsrc) : [],
+            'VidZee': ENABLE_VIDZEE_PROVIDER && shouldFetch('vidzee') ? applyAllStreamFilters(providerResults[7], 'VidZee', minQualitiesPreferences.vidzee, excludeCodecsPreferences.vidzee) : [],
+            'MP4Hydra': ENABLE_MP4HYDRA_PROVIDER && shouldFetch('mp4hydra') ? applyAllStreamFilters(providerResults[8], 'MP4Hydra', minQualitiesPreferences.mp4hydra, excludeCodecsPreferences.mp4hydra) : [],
+            'UHDMovies': ENABLE_UHDMOVIES_PROVIDER && shouldFetch('uhdmovies') ? applyAllStreamFilters(providerResults[9], 'UHDMovies', minQualitiesPreferences.uhdmovies, excludeCodecsPreferences.uhdmovies) : [], // NEW: Add UHDMovies provider
+            'MoviesMod': ENABLE_MOVIESMOD_PROVIDER && shouldFetch('moviesmod') ? applyAllStreamFilters(providerResults[10], 'MoviesMod', minQualitiesPreferences.moviesmod, excludeCodecsPreferences.moviesmod) : [], // NEW: Add MoviesMod provider
+            'TopMovies': ENABLE_TOPMOVIES_PROVIDER && shouldFetch('topmovies') ? applyAllStreamFilters(providerResults[11], 'TopMovies', minQualitiesPreferences.topmovies, excludeCodecsPreferences.topmovies) : [], 
+            'DramaDrip': ENABLE_DRAMADRIP_PROVIDER && shouldFetch('dramadrip') ? applyAllStreamFilters(providerResults[12], 'DramaDrip', minQualitiesPreferences.dramadrip, excludeCodecsPreferences.dramadrip) : [],
+            'AnimePahe': ENABLE_ANIMEPAHE_PROVIDER && shouldFetch('animepahe') ? applyAllStreamFilters(providerResults[13], 'AnimePahe', minQualitiesPreferences.animepahe, excludeCodecsPreferences.animepahe) : []
         };
 
-        // Sort streams for each provider by size, then quality
-        console.log('Sorting streams for each provider by size, then quality...');
+        // Sort streams for each provider by quality, then size
+        console.log('Sorting streams for each provider by quality, then size...');
         for (const provider in streamsByProvider) {
             streamsByProvider[provider].sort((a, b) => {
-                const sizeA = parseSize(a.size);
-                const sizeB = parseSize(b.size);
-                if (sizeB !== sizeA) {
-                    return sizeB - sizeA;
-                }
                 const qualityA = parseQuality(a.quality);
                 const qualityB = parseQuality(b.quality);
-                return qualityB - qualityA;
+                if (qualityB !== qualityA) {
+                    return qualityB - qualityA; // Higher quality first
+                }
+                const sizeA = parseSize(a.size);
+                const sizeB = parseSize(b.size);
+                return sizeB - sizeA; // Larger file first if same quality
             });
         }
 
         // Combine streams in the preferred provider order
         combinedRawStreams = [];
-        const providerOrder = ['ShowBox', 'UHDMovies', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'MP4Hydra', 'Cuevana', 'VidSrc', 'MoviesMod'];
+        const providerOrder = ['ShowBox', 'UHDMovies', 'MoviesMod', 'TopMovies', 'DramaDrip', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'MP4Hydra', 'Cuevana', 'VidSrc', 'AnimePahe'];
         providerOrder.forEach(providerKey => {
             if (streamsByProvider[providerKey] && streamsByProvider[providerKey].length > 0) {
                 combinedRawStreams.push(...streamsByProvider[providerKey]);
@@ -1365,11 +1754,28 @@ builder.defineStreamHandler(async (args) => {
             };
         }
 
+        // --- NEW: Special handling for TopMovies to use its pre-formatted titles ---
+        if (stream.provider === 'TopMovies') {
+            return {
+                name: stream.name,    // Use the name from the provider, e.g., "TopMovies - 1080p"
+                title: stream.title,  // Use the title from the provider, e.g., "Filename.mkv\nSize"
+                url: stream.url,
+                type: 'url',
+                availability: 2,
+                behaviorHints: {
+                    notWebReady: true
+                }
+            };
+        }
+
         const qualityLabel = stream.quality || 'UNK'; // UNK for unknown
         
         let displayTitle;
         
-        if (stream.provider === 'UHDMovies' && stream.fullTitle) {
+        if (stream.provider === 'UHDMovies' && stream.fileName) {
+            const cleanFileName = stream.fileName.replace(/\.[^/.]+$/, "").replace(/[._]/g, ' ');
+            displayTitle = cleanFileName; // Use the cleaned filename as the main title
+        } else if (stream.provider === 'UHDMovies' && stream.fullTitle) {
             displayTitle = stream.fullTitle;
         } else if (tmdbTypeFromId === 'tv' && seasonNum !== null && episodeNum !== null && movieOrSeriesTitle) {
             displayTitle = `${movieOrSeriesTitle} S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`;
@@ -1430,6 +1836,12 @@ builder.defineStreamHandler(async (args) => {
             providerDisplayName = 'UHDMovies';
         } else if (stream.provider === 'MoviesMod') {
             providerDisplayName = 'MoviesMod';
+        } else if (stream.provider === 'TopMovies') {
+            providerDisplayName = 'TopMovies';
+        } else if (stream.provider === 'DramaDrip') {
+            providerDisplayName = 'DramaDrip';
+        } else if (stream.provider === 'AnimePahe') {
+            providerDisplayName = 'AnimePahe';
         }
 
         let nameDisplay;
@@ -1468,6 +1880,27 @@ builder.defineStreamHandler(async (args) => {
             // For MoviesMod, use the enhanced stream title that comes from the provider
             // which includes detailed quality, codec, size, language and method information
             nameDisplay = stream.title || `${providerDisplayName} - ${stream.quality || 'UNK'}`;
+        } else if (stream.provider === 'TopMovies') {
+            nameDisplay = stream.title || `${providerDisplayName} - ${stream.quality || 'UNK'}`;
+        } else if (stream.provider === 'DramaDrip') {
+            // For DramaDrip, we also use a pre-formatted title
+            return {
+                name: stream.name,
+                title: stream.title,
+                url: stream.url,
+                type: 'url',
+                availability: 2,
+                behaviorHints: {
+                    notWebReady: true
+                }
+            };
+        } else if (stream.provider === 'AnimePahe') {
+            // AnimePahe specific display (Quality is included in title from animepahe.js)
+            // So, we might just use the stream.title directly or format similarly to Cuevana if preferred
+            // For now, let's assume stream.title is already formatted as `AnimePahe CATEGORY - Quality`
+            nameDisplay = stream.title || `${providerDisplayName} - ${stream.quality || 'Auto'}`;
+            // If stream.title already includes providerDisplayName, we can simplify:
+            // nameDisplay = stream.title; 
         } else { // For other providers (ShowBox, Xprime, etc.)
             const qualityLabel = stream.quality || 'UNK';
             if (flagEmoji) {
@@ -1585,4 +2018,4 @@ ${warningMessage}`;
 });
 
 // Build and export the addon
-module.exports = builder.getInterface(); 
+module.exports = builder.getInterface();
