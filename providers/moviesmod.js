@@ -103,7 +103,7 @@ ensureCacheDir();
 const TMDB_API_KEY_MOVIESMOD = "439c478a771f35c05022f9feabcca01c"; // Public TMDB API key
 
 // --- Caching Configuration ---
-const CACHE_ENABLED = process.env.DISABLE_CACHE !== 'true'; // Set to true to disable caching for this provider
+//const CACHE_ENABLED = process.env.DISABLE_CACHE !== 'true'; // Set to true to disable caching for this provider
 console.log(`[MoviesMod] Internal cache is ${CACHE_ENABLED ? 'enabled' : 'disabled'}.`);
 const CACHE_DIR = path.join(__dirname, '.cache', 'moviesmod'); // Cache directory inside providers/moviesmod
 const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
