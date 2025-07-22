@@ -2,10 +2,9 @@ name: Sync Fork with Upstream
 
 on:
   schedule:
-    # Run every day at midnight PST (UTC-8)
-    # The cron string is in UTC. Midnight PST is 8 AM UTC.
+    # Run every day at 8 AM UTC
     - cron: '0 8 * * *'
-  workflow_dispatch: # Allows manual triggering of the workflow
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -14,7 +13,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # We need a PAT here to push and to trigger the next workflow
+          token: ${{ secrets.PAT }}
           fetch-depth: 0
+
+      - name: Get commit hash before sync
+        id: pre_sync
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Configure Git user
         run: |
@@ -22,19 +27,32 @@ jobs:
           git config user.name "GitHub Actions"
 
       - name: Add upstream remote
-        run: git remote add upstream ${{ env.UPSTREAM_REPO }}
-        env:
-          UPSTREAM_REPO: https://github.com/tapframe/NuvioStreamsAddon.git
+        run: git remote add upstream https://github.com/tapframe/NuvioStreamsAddon.git
 
       - name: Fetch upstream branches
         run: git fetch upstream
 
-      # --- THIS IS THE KEY MODIFIED STEP ---
       - name: Merge upstream and resolve conflicts
         run: |
-          # Attempt the merge, using the 'theirs' option to auto-resolve conflicts
-          # The .gitattributes file will ensure 'Dockerfile' uses the 'ours' strategy
-          git merge --no-edit -X theirs upstream/master
+          # The .gitattributes file will protect your Dockerfile and .yaml files.
+          # The -X theirs option will auto-resolve all other conflicts using the upstream version.
+          git merge --no-edit -X theirs upstream/master || true
 
       - name: Push changes to fork
         run: git push origin master
+
+      - name: Get commit hash after sync
+        id: post_sync
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check for changes and trigger Docker build
+        # This step only runs if the commit hash has changed
+        if: steps.pre_sync.outputs.sha != steps.post_sync.outputs.sha
+        uses: benc-uk/workflow-dispatch-action@v1
+        with:
+          workflow: Build and Push Docker Image  # Name of the workflow file to trigger
+          token: ${{ secrets.PAT }}
+
+      - name: Report no changes
+        if: steps.pre_sync.outputs.sha == steps.post_sync.outputs.sha
+        run: echo "Repository is already up-to-date. No new changes from upstream. Docker build skipped."
