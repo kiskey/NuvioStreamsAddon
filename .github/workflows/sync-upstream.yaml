@@ -14,36 +14,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Required for `github_token` to push to your repository
           fetch-depth: 0
 
-      # --- ADD THESE LINES ---
       - name: Configure Git user
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-      # --- END ADDITION ---
 
       - name: Add upstream remote
         run: git remote add upstream ${{ env.UPSTREAM_REPO }}
         env:
-          # Replace with the actual upstream repository URL
-          # Example: https://github.com/Stremio/stremio-addon-sdk
           UPSTREAM_REPO: https://github.com/tapframe/NuvioStreamsAddon.git
 
       - name: Fetch upstream branches
         run: git fetch upstream
 
-      - name: Merge upstream/master into local master
-        run: git merge --no-edit upstream/master -m "Merge upstream/master into local master" || true
+      # --- THIS IS THE KEY MODIFIED STEP ---
+      - name: Merge upstream and resolve conflicts
+        run: |
+          # Attempt the merge, using the 'theirs' option to auto-resolve conflicts
+          # The .gitattributes file will ensure 'Dockerfile' uses the 'ours' strategy
+          git merge --no-edit -X theirs upstream/master
 
       - name: Push changes to fork
         run: git push origin master
-
-      - name: Prevent Dockerfile Overwrite (Manual Check/Resolution)
-        run: |
-          echo "Please note: This automated sync does NOT prevent upstream changes to a 'Dockerfile' from being merged."
-          echo "If the upstream introduces a 'Dockerfile' or modifies a file with the same name, it will be merged."
-          echo "You may need to manually intervene and resolve conflicts or revert changes to your 'Dockerfile'."
-          echo "Consider having your Dockerfile in a separate branch and merging upstream to that branch, or cherry-picking."
-          echo "Or, if you always want your Dockerfile, you could add it to .gitattributes as a merge strategy."
