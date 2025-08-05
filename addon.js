@@ -166,6 +166,10 @@ console.log(`[addon.js] DramaDrip provider fetching enabled: ${ENABLE_DRAMADRIP_
 const ENABLE_MOVIESDRIVE_PROVIDER = process.env.ENABLE_MOVIESDRIVE_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
 console.log(`[addon.js] MoviesDrive provider fetching enabled: ${ENABLE_MOVIESDRIVE_PROVIDER}`);
 
+// NEW: Read environment variable for 4KHDHub
+const ENABLE_4KHDHUB_PROVIDER = process.env.ENABLE_4KHDHUB_PROVIDER !== 'false'; // Defaults to true if not set or not 'false'
+console.log(`[addon.js] 4KHDHub provider fetching enabled: ${ENABLE_4KHDHUB_PROVIDER}`);
+
 // External provider service configuration
 const USE_EXTERNAL_PROVIDERS = process.env.USE_EXTERNAL_PROVIDERS === 'true';
 const EXTERNAL_UHDMOVIES_URL = USE_EXTERNAL_PROVIDERS ? process.env.EXTERNAL_UHDMOVIES_URL : null;
@@ -204,6 +208,7 @@ const { getTopMoviesStreams } = require('./providers/topmovies.js'); // NEW: Imp
 const { getDramaDripStreams } = require('./providers/dramadrip.js'); // NEW: Import from dramadrip.js
 const { getAnimePaheStreams } = require('./providers/animepahe.js'); // NEW: Import from animepahe.js
 const { getMoviesDriveStreams } = require('./providers/moviesdrive.js'); // NEW: Import from moviesdrive.js
+const { get4KHDHubStreams } = require('./providers/4khdhub.js'); // NEW: Import from 4khdhub.js
 const axios = require('axios'); // For external provider requests
 
 // Helper function to make requests to external provider services
@@ -1714,6 +1719,48 @@ builder.defineStreamHandler(async (args) => {
                 await saveStreamToCache('moviesdrive', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
                 return [];
             }
+        },
+
+        // 4KHDHub provider with cache integration
+        '4khdhub': async () => {
+            if (!ENABLE_4KHDHUB_PROVIDER) {
+                console.log('[4KHDHub] Skipping fetch: Disabled by environment variable.');
+                return [];
+            }
+            if (!shouldFetch('4khdhub')) {
+                console.log('[4KHDHub] Skipping fetch: Not selected by user.');
+                return [];
+            }
+            
+            // Try to get cached streams first
+            const cachedStreams = await getStreamFromCache('4khdhub', tmdbTypeFromId, tmdbId, seasonNum, episodeNum);
+            if (cachedStreams) {
+                console.log(`[4KHDHub] Using ${cachedStreams.length} streams from cache.`);
+                return cachedStreams.map(stream => ({ ...stream, provider: '4KHDHub' }));
+            }
+            
+            // No cache or expired, fetch fresh
+            try {
+                console.log(`[4KHDHub] Fetching new streams...`);
+                const streams = await get4KHDHubStreams(tmdbId, tmdbTypeFromId, seasonNum, episodeNum);
+                
+                if (streams && streams.length > 0) {
+                    console.log(`[4KHDHub] Successfully fetched ${streams.length} streams.`);
+                    // Save to cache
+                    await saveStreamToCache('4khdhub', tmdbTypeFromId, tmdbId, streams, 'ok', seasonNum, episodeNum);
+                    return streams.map(stream => ({ ...stream, provider: '4KHDHub' }));
+                } else {
+                    console.log(`[4KHDHub] No streams returned.`);
+                    // Save empty result
+                    await saveStreamToCache('4khdhub', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
+                    return [];
+                }
+            } catch (err) {
+                console.error(`[4KHDHub] Error fetching streams:`, err.message);
+                // Save error status to cache
+                await saveStreamToCache('4khdhub', tmdbTypeFromId, tmdbId, [], 'failed', seasonNum, episodeNum);
+                return [];
+            }
         }
     };
 
@@ -1737,7 +1784,8 @@ builder.defineStreamHandler(async (args) => {
             timeProvider('TopMovies', providerFetchFunctions.topmovies()),
             timeProvider('DramaDrip', providerFetchFunctions.dramadrip()),
             timeProvider('AnimePahe', providerFetchFunctions.animepahe()),
-            timeProvider('MoviesDrive', providerFetchFunctions.moviesdrive())
+            timeProvider('MoviesDrive', providerFetchFunctions.moviesdrive()),
+            timeProvider('4KHDHub', providerFetchFunctions['4khdhub']())
         ]);
         
         // Process results into streamsByProvider object
@@ -1756,7 +1804,8 @@ builder.defineStreamHandler(async (args) => {
             'TopMovies': ENABLE_TOPMOVIES_PROVIDER && shouldFetch('topmovies') ? applyAllStreamFilters(providerResults[11], 'TopMovies', minQualitiesPreferences.topmovies, excludeCodecsPreferences.topmovies) : [], 
             'DramaDrip': ENABLE_DRAMADRIP_PROVIDER && shouldFetch('dramadrip') ? applyAllStreamFilters(providerResults[12], 'DramaDrip', minQualitiesPreferences.dramadrip, excludeCodecsPreferences.dramadrip) : [],
             'AnimePahe': ENABLE_ANIMEPAHE_PROVIDER && shouldFetch('animepahe') ? applyAllStreamFilters(providerResults[13], 'AnimePahe', minQualitiesPreferences.animepahe, excludeCodecsPreferences.animepahe) : [],
-            'MoviesDrive': ENABLE_MOVIESDRIVE_PROVIDER && shouldFetch('moviesdrive') ? applyAllStreamFilters(providerResults[14], 'MoviesDrive', minQualitiesPreferences.moviesdrive, excludeCodecsPreferences.moviesdrive) : []
+            'MoviesDrive': ENABLE_MOVIESDRIVE_PROVIDER && shouldFetch('moviesdrive') ? applyAllStreamFilters(providerResults[14], 'MoviesDrive', minQualitiesPreferences.moviesdrive, excludeCodecsPreferences.moviesdrive) : [],
+            '4KHDHub': ENABLE_4KHDHUB_PROVIDER && shouldFetch('4khdhub') ? applyAllStreamFilters(providerResults[15], '4KHDHub', minQualitiesPreferences['4khdhub'], excludeCodecsPreferences['4khdhub']) : []
         };
 
         // Sort streams for each provider by quality, then size
@@ -1776,7 +1825,7 @@ builder.defineStreamHandler(async (args) => {
 
         // Combine streams in the preferred provider order
         combinedRawStreams = [];
-        const providerOrder = ['ShowBox', 'UHDMovies', 'MoviesMod', 'TopMovies', 'DramaDrip', 'MoviesDrive', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'MP4Hydra', 'Cuevana', 'VidSrc', 'AnimePahe'];
+        const providerOrder = ['ShowBox', 'UHDMovies', '4KHDHub', 'MoviesMod', 'TopMovies', 'DramaDrip', 'MoviesDrive', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'MP4Hydra', 'Cuevana', 'VidSrc', 'AnimePahe'];
         providerOrder.forEach(providerKey => {
             if (streamsByProvider[providerKey] && streamsByProvider[providerKey].length > 0) {
                 combinedRawStreams.push(...streamsByProvider[providerKey]);
@@ -1850,6 +1899,8 @@ builder.defineStreamHandler(async (args) => {
             displayTitle = cleanFileName; // Use the cleaned filename as the main title
         } else if (stream.provider === 'UHDMovies' && stream.fullTitle) {
             displayTitle = stream.fullTitle;
+        } else if (stream.provider === '4KHDHub' && stream.title) {
+            displayTitle = stream.title; // Use the enhanced title that includes filename and size
         } else if (tmdbTypeFromId === 'tv' && seasonNum !== null && episodeNum !== null && movieOrSeriesTitle) {
             displayTitle = `${movieOrSeriesTitle} S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`;
         } else if (movieOrSeriesTitle) {
@@ -1917,6 +1968,8 @@ builder.defineStreamHandler(async (args) => {
             providerDisplayName = 'AnimePahe';
         } else if (stream.provider === 'MoviesDrive') {
             providerDisplayName = 'MoviesDrive';
+        } else if (stream.provider === '4KHDHub') {
+            providerDisplayName = '4KHDHub';
         }
 
         let nameDisplay;
@@ -1980,6 +2033,83 @@ builder.defineStreamHandler(async (args) => {
             // For MoviesDrive, use the enhanced stream title that comes from the provider
             // which includes detailed quality, source, and size information
             nameDisplay = stream.name || `${providerDisplayName} - ${stream.quality || 'UNK'}`;
+        } else if (stream.provider === '4KHDHub') {
+            // For 4KHDHub, extract metadata from stream title and enhance the name
+            const extractMetadata = (title) => {
+                if (!title) return { nameMetadata: [], audioMetadata: [] };
+                const nameMetadata = [];
+                const audioMetadata = [];
+                
+                // Check for HDR formats
+                if (/HDR10/i.test(title)) nameMetadata.push('HDR10');
+                if (/\bDV\b|Dolby.?Vision/i.test(title)) nameMetadata.push('DV');
+                if (/HDR/i.test(title) && !nameMetadata.includes('HDR10')) nameMetadata.push('HDR');
+                
+                // Check for source formats
+                if (/BluRay|Blu-ray|BDRip|BRRip/i.test(title)) nameMetadata.push('BluRay');
+                if (/WEB-?DL|WEBRip/i.test(title)) nameMetadata.push('WEB');
+                if (/REMUX/i.test(title)) nameMetadata.push('REMUX');
+                if (/DVD/i.test(title)) nameMetadata.push('DVD');
+                
+                // Check for special formats
+                if (/IMAX/i.test(title)) nameMetadata.push('IMAX');
+                
+                // Check for audio formats (for title field)
+                if (/ATMOS/i.test(title)) audioMetadata.push('ATMOS');
+                if (/DTS/i.test(title)) audioMetadata.push('DTS');
+                
+                return { nameMetadata, audioMetadata };
+            };
+            
+            // Create abbreviated server name mapping for 4KHDHub
+            const getAbbreviatedServerName = (streamName) => {
+                if (!streamName) return `${providerDisplayName} - ${stream.quality || 'UNK'}`;
+                
+                const serverMappings = {
+                    'HubCloud': '[HC]',
+                    'Pixeldrain': '[PD]',
+                    'FSL Server': '[FSL]',
+                    'BuzzServer': '[BS]',
+                    'S3 Server': '[S3]',
+                    '10Gbps Server': '[10G]',
+                    'HubDrive': '[HD]',
+                    'Direct Link': '[DL]'
+                };
+                
+                // Extract server name from stream.name (format: "4KHDHub - ServerName - Quality")
+                 const match = streamName.match(/4KHDHub - ([^-]+)/);
+                 if (match) {
+                     const serverName = match[1].trim();
+                     const abbreviation = serverMappings[serverName] || `[${serverName.substring(0, 3).toUpperCase()}]`;
+                     
+                     // Format quality display
+                     const quality = stream.quality || 'UNK';
+                     let qualityDisplay;
+                     if (quality === '2160' || quality === 2160 || quality === '2160p') {
+                         qualityDisplay = '4K';
+                     } else if (typeof quality === 'string' && quality.endsWith('p')) {
+                         qualityDisplay = quality; // Already has 'p' suffix
+                     } else {
+                         qualityDisplay = `${quality}p`;
+                     }
+                     
+                     return `4KHDHub ${abbreviation} - ${qualityDisplay}`;
+                 }
+                
+                return streamName;
+            };
+            
+            const baseName = getAbbreviatedServerName(stream.name);
+            const { nameMetadata, audioMetadata } = extractMetadata(stream.title);
+            
+            // Store audio metadata for later use in title field
+            stream.audioMetadata = audioMetadata;
+            
+            if (nameMetadata.length > 0) {
+                nameDisplay = `${baseName} | ${nameMetadata.join(' | ')}`;
+            } else {
+                nameDisplay = baseName;
+            }
         } else { // For other providers (ShowBox, Xprime, etc.)
             const qualityLabel = stream.quality || 'UNK';
             if (flagEmoji) {
@@ -2045,7 +2175,14 @@ builder.defineStreamHandler(async (args) => {
         }
 
         if (stream.size && stream.size !== 'Unknown size' && !stream.size.toLowerCase().includes('n/a')) {
-            titleParts.push(stream.size);
+            let sizeWithAudio = stream.size;
+            
+            // Add audio metadata for 4KHDHub after size with dot separation
+            if (stream.provider === '4KHDHub' && stream.audioMetadata && stream.audioMetadata.length > 0) {
+                sizeWithAudio += ' • ' + stream.audioMetadata.join(' • ');
+            }
+            
+            titleParts.push(sizeWithAudio);
         }
             
         const titleSecondLine = titleParts.join(" • ");
