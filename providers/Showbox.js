@@ -2236,10 +2236,10 @@ const getStreamsFromTmdbId = async (tmdbType, tmdbId, seasonNum = null, episodeN
 // Function to handle TV shows with seasons and episodes
 // MODIFICATION: Accept scraperApiKey -> MODIFICATION: Remove scraperApiKey
 // New parameter: resolveFids, defaults to true. If false, skips fetching sources for FIDs.
-const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum, episodeNum, resolveFids = true, regionPreference = null, userCookie = null) => {
-    const processTimerLabel = `processShowWithSeasonsEpisodes_total_s${seasonNum}` + (episodeNum ? `_e${episodeNum}` : '_all') + (resolveFids ? '_resolve' : '_noresolve');
+const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum, episodeNum, resolveFids = true, regionPreference = null, userCookie = null, retryAttempt = 0) => {
+    const processTimerLabel = `processShowWithSeasonsEpisodes_total_s${seasonNum}` + (episodeNum ? `_e${episodeNum}` : '_all') + (resolveFids ? '_resolve' : '_noresolve') + (retryAttempt > 0 ? `_retry${retryAttempt}` : '');
     console.time(processTimerLabel);
-    console.log(`Processing TV Show: ${showboxTitle}, Season: ${seasonNum}, Episode: ${episodeNum !== null ? episodeNum : 'all'}${resolveFids ? '' : ' (FIDs not resolved)'}`);
+    console.log(`Processing TV Show: ${showboxTitle}, Season: ${seasonNum}, Episode: ${episodeNum !== null ? episodeNum : 'all'}${resolveFids ? '' : ' (FIDs not resolved)'}${retryAttempt > 0 ? ` (Retry attempt ${retryAttempt})` : ''}`);
 
     const streamsForThisCall = []; // Initialize local array to store streams for this call
     let selectedEpisode = null; // Ensure selectedEpisode is declared here
@@ -2249,8 +2249,8 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
     const urlHash = crypto.createHash('md5').update(febboxUrl).digest('hex');
     const cacheKeyMain = `${urlHash}.html`;
 
-    // Try to get the main page from cache first
-    let contentHtml = await getFromCache(cacheKeyMain, cacheSubDirMain);
+    // Try to get the main page from cache first (skip cache on retry)
+    let contentHtml = retryAttempt > 0 ? null : await getFromCache(cacheKeyMain, cacheSubDirMain);
 
     if (!contentHtml) {
         // If not cached, fetch the HTML content
@@ -2265,7 +2265,7 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
             timeout: 20000
         };
 
-        console.log(`Fetching main FebBox page ${febboxUrl} directly`);
+        console.log(`Fetching main FebBox page ${febboxUrl} directly${retryAttempt > 0 ? ' (forced refresh for missing season)' : ''}`);
 
         try {
             const response = await axios.get(finalFebboxUrl, axiosConfigMainPage);
@@ -2469,9 +2469,17 @@ const processShowWithSeasonsEpisodes = async (febboxUrl, showboxTitle, seasonNum
     }
 
     if (!selectedFolder) {
-        console.log(`Could not find season ${seasonNum} folder in ${febboxUrl}`);
-        console.timeEnd(processTimerLabel);
-        return streamsForThisCall;
+        // If season not found and this is the first attempt, try refreshing the cache
+        if (retryAttempt === 0) {
+            console.log(`Season ${seasonNum} not found in cached data. Attempting fresh fetch...`);
+            console.timeEnd(processTimerLabel);
+            // Recursive call with retry attempt to force fresh fetch
+            return await processShowWithSeasonsEpisodes(febboxUrl, showboxTitle, seasonNum, episodeNum, resolveFids, regionPreference, userCookie, 1);
+        } else {
+            console.log(`Could not find season ${seasonNum} folder in ${febboxUrl} even after fresh fetch. Aborting.`);
+            console.timeEnd(processTimerLabel);
+            return streamsForThisCall;
+        }
     }
 
     console.log(`Selected season folder: ${selectedFolder.name} (ID: ${selectedFolder.id})`);

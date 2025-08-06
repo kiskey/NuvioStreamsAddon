@@ -674,8 +674,18 @@ function extractHubCloudLinks(url, referer) {
                         });
                     } else if (link.includes('pixeldra')) {
                         console.log(`[4KHDHub] Button ${index + 1} is Pixeldrain`);
+                        
+                        // Convert pixeldrain.net/u/ID format to pixeldrain.net/api/file/ID format
+                        let convertedLink = link;
+                        const pixeldrainMatch = link.match(/pixeldrain\.net\/u\/([a-zA-Z0-9]+)/);
+                        if (pixeldrainMatch) {
+                            const fileId = pixeldrainMatch[1];
+                            convertedLink = `https://pixeldrain.net/api/file/${fileId}`;
+                            console.log(`[4KHDHub] Converted Pixeldrain URL from ${link} to ${convertedLink}`);
+                        }
+                        
                         // Get actual filename from HEAD request
-                        getFilenameFromUrl(link)
+                        getFilenameFromUrl(convertedLink)
                             .then(actualFilename => {
                                 const displayFilename = actualFilename || headerDetails || 'Unknown';
                                 const titleParts = [];
@@ -686,7 +696,7 @@ function extractHubCloudLinks(url, referer) {
                                 resolve({
                                     name: `4KHDHub - Pixeldrain${qualityLabel}`,
                                     title: finalTitle,
-                                    url: link,
+                                    url: convertedLink,
                                     quality: quality
                                 });
                             })
@@ -700,7 +710,7 @@ function extractHubCloudLinks(url, referer) {
                                 resolve({
                                     name: `4KHDHub - Pixeldrain${qualityLabel}`,
                                     title: finalTitle,
-                                    url: link,
+                                    url: convertedLink,
                                     quality: quality
                                 });
                             });
@@ -1458,9 +1468,9 @@ async function get4KHDHubStreams(tmdbId, type, season = null, episode = null) {
         
         console.log(`[4KHDHub] Processing ${uniqueLinks.length} unique links (${streamingLinks.length - filteredLinks.length} suspicious URLs filtered, ${filteredLinks.length - uniqueLinks.length} duplicates removed)`);
         
-        // Validate URLs if DISABLE_URL_VALIDATION is false
+        // Validate URLs if DISABLE_4KHDHUB_URL_VALIDATION is false
         let validatedLinks = uniqueLinks;
-        const disableValidation = process.env.DISABLE_URL_VALIDATION === 'true';
+        const disableValidation = process.env.DISABLE_4KHDHUB_URL_VALIDATION === 'true';
         
         if (!disableValidation) {
             console.log(`[4KHDHub] URL validation enabled, validating ${uniqueLinks.length} links...`);
