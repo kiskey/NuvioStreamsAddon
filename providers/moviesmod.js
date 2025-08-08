@@ -26,6 +26,14 @@ function escapeRegExp(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
 }
 
+// --- Proxy Configuration ---
+const MOVIESMOD_PROXY_URL = process.env.MOVIESMOD_PROXY_URL;
+if (MOVIESMOD_PROXY_URL) {
+  console.log(`[MoviesMod] Proxy support enabled: ${MOVIESMOD_PROXY_URL}`);
+} else {
+  console.log('[MoviesMod] No proxy configured, using direct connections');
+}
+
 // --- Domain Fetching ---
 let moviesModDomain = 'https://moviesmod.chat'; // Fallback domain
 let domainCacheTimestamp = 0;
@@ -39,7 +47,7 @@ async function getMoviesModDomain() {
 
     try {
         console.log('[MoviesMod] Fetching latest domain...');
-        const response = await axios.get('https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json', { timeout: 10000 });
+        const response = await makeRequest('https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json', { timeout: 10000 });
         if (response.data && response.data.moviesmod) {
             moviesModDomain = response.data.moviesmod;
             domainCacheTimestamp = now;
@@ -99,8 +107,19 @@ const saveToCache = async (key, data) => {
 // Initialize cache directory on startup
 ensureCacheDir();
 
-// Constants
-const TMDB_API_KEY_MOVIESMOD = "439c478a771f35c05022f9feabcca01c"; // Public TMDB API key
+// Proxy wrapper function
+const makeRequest = async (url, options = {}) => {
+  if (MOVIESMOD_PROXY_URL) {
+    // Route through proxy
+    const proxiedUrl = `${MOVIESMOD_PROXY_URL}${encodeURIComponent(url)}`;
+    console.log(`[MoviesMod] Making proxied request to: ${url}`);
+    return axios.get(proxiedUrl, options);
+  } else {
+    // Direct request
+    console.log(`[MoviesMod] Making direct request to: ${url}`);
+    return axios.get(url, options);
+  }
+};
 
 // Helper function to extract quality from text
 function extractQuality(text) {
@@ -142,7 +161,7 @@ async function searchMoviesMod(query) {
     try {
         const baseUrl = await getMoviesModDomain();
         const searchUrl = `${baseUrl}/?s=${encodeURIComponent(query)}`;
-        const { data } = await axios.get(searchUrl);
+        const { data } = await makeRequest(searchUrl);
         const $ = cheerio.load(data);
 
         const results = [];
@@ -165,7 +184,7 @@ async function searchMoviesMod(query) {
 // Extract download links from a movie/series page
 async function extractDownloadLinks(moviePageUrl) {
     try {
-        const { data } = await axios.get(moviePageUrl);
+        const { data } = await makeRequest(moviePageUrl);
         const $ = cheerio.load(data);
         const links = [];
         const contentBox = $('.thecontent');
@@ -290,7 +309,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl, quality) {
         const urlObject = new URL(initialUrl);
 
         if (urlObject.hostname.includes('dramadrip.com')) {
-            const { data: dramaData } = await axios.get(initialUrl, { headers: { 'Referer': refererUrl } });
+            const { data: dramaData } = await makeRequest(initialUrl, { headers: { 'Referer': refererUrl } });
             const $$ = cheerio.load(dramaData);
 
             let episodePageLink = null;
@@ -331,7 +350,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl, quality) {
 
         } else if (urlObject.hostname.includes('cinematickit.org')) {
             // Handle cinematickit.org pages
-            const { data } = await axios.get(initialUrl, { headers: { 'Referer': refererUrl } });
+            const { data } = await makeRequest(initialUrl, { headers: { 'Referer': refererUrl } });
             const $ = cheerio.load(data);
             const finalLinks = [];
 
@@ -364,7 +383,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl, quality) {
             return finalLinks;
 
         } else if (urlObject.hostname.includes('episodes.modpro.blog')) {
-            const { data } = await axios.get(initialUrl, { headers: { 'Referer': refererUrl } });
+            const { data } = await makeRequest(initialUrl, { headers: { 'Referer': refererUrl } });
             const $ = cheerio.load(data);
             const finalLinks = [];
 
@@ -388,7 +407,7 @@ async function resolveIntermediateLink(initialUrl, refererUrl, quality) {
             }
 
             const decodedUrl = Buffer.from(encodedUrl, 'base64').toString('utf8');
-            const { data } = await axios.get(decodedUrl, {
+            const { data } = await makeRequest(decodedUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                     'Referer': refererUrl,
@@ -956,18 +975,108 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
                     const { driveseedRedirectUrl } = targetLink;
                     if (!driveseedRedirectUrl) return null;
 
-                    const { downloadOptions, size, fileName } = await resolveDriveseedLink(driveseedRedirectUrl);
-                    
-                    if (!fileName || processedFileNames.has(fileName)) return null;
-                    processedFileNames.add(fileName);
+                    // Process the cached driveseed redirect URL
+                    if (driveseedRedirectUrl.includes('driveseed.org')) {
+                        // First, resolve the driveseed redirect URL to get the final file page URL
+                        const response = await makeRequest(driveseedRedirectUrl, {
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                                'Referer': 'https://links.modpro.blog/',
+                            }
+                        });
 
                     if (!downloadOptions || downloadOptions.length === 0) return null;
 
-                    const methodPromises = downloadOptions.map(async (option) => {
-                        let finalDownloadUrl = null;
-                        if (option.type === 'resume') finalDownloadUrl = await resolveResumeCloudLink(option.url);
-                        else if (option.type === 'worker') finalDownloadUrl = await resolveWorkerSeedLink(option.url);
-                        else if (option.type === 'instant') finalDownloadUrl = await resolveVideoSeedLink(option.url);
+                        let finalFilePageUrl = driveseedRedirectUrl;
+                        if (redirectMatch && redirectMatch[1]) {
+                            const finalPath = redirectMatch[1];
+                            finalFilePageUrl = `https://driveseed.org${finalPath}`;
+                            console.log(`[MoviesMod] Resolved redirect to final file page: ${finalFilePageUrl}`);
+                            
+                            // Load the final file page
+                            const finalResponse = await makeRequest(finalFilePageUrl, {
+                                headers: {
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                                    'Referer': driveseedRedirectUrl,
+                                }
+                            });
+                            
+                            var $ = cheerio.load(finalResponse.data);
+                        } else {
+                            var $ = cheerio.load(response.data);
+                        }
+
+                        // Extract file size and name information
+                        let driveseedSize = 'Unknown';
+                        let fileName = null;
+
+                        const sizeElement = $('li.list-group-item:contains("Size :")').text();
+                        if (sizeElement) {
+                            const sizeMatch = sizeElement.match(/Size\s*:\s*([0-9.,]+\s*[KMGT]B)/);
+                            if (sizeMatch) {
+                                driveseedSize = sizeMatch[1];
+                            }
+                        }
+
+                        const nameElement = $('li.list-group-item:contains("Name :")');
+                        if (nameElement.length > 0) {
+                            fileName = nameElement.text().replace('Name :', '').trim();
+                        } else {
+                            const h5Title = $('div.card-header h5').clone().children().remove().end().text().trim();
+                            if (h5Title) {
+                                fileName = h5Title.replace(/\[.*\]/, '').trim();
+                            }
+                        }
+
+                        // Extract download options
+                        const downloadOptions = [];
+
+                        // Find Resume Cloud button (primary)
+                        const resumeCloudLink = $('a:contains("Resume Cloud")').attr('href');
+                        if (resumeCloudLink) {
+                            downloadOptions.push({
+                                title: 'Resume Cloud',
+                                type: 'resume',
+                                url: `https://driveseed.org${resumeCloudLink}`,
+                                priority: 1
+                            });
+                        }
+
+                        // Find Resume Worker Bot (fallback)
+                        const workerSeedLink = $('a:contains("Resume Worker Bot")').attr('href');
+                        if (workerSeedLink) {
+                            downloadOptions.push({
+                                title: 'Resume Worker Bot',
+                                type: 'worker',
+                                url: workerSeedLink,
+                                priority: 2
+                            });
+                        }
+
+                        // Find Instant Download (final fallback)
+                        const instantDownloadLink = $('a:contains("Instant Download")').attr('href');
+                        if (instantDownloadLink) {
+                            downloadOptions.push({
+                                title: 'Instant Download',
+                                type: 'instant',
+                                url: instantDownloadLink,
+                                priority: 3
+                            });
+                        }
+
+                        // Sort by priority
+                        downloadOptions.sort((a, b) => a.priority - b.priority);
+
+                        if (fileName && processedFileNames.has(fileName)) {
+                            console.log(`[MoviesMod] Skipping duplicate file: ${fileName}`);
+                            return null;
+                        }
+                        if (fileName) processedFileNames.add(fileName);
+
+                        if (!downloadOptions || downloadOptions.length === 0) return null;
+
+                        // Try all download methods in parallel (racing approach)
+                        console.log(`[MoviesMod] Racing ${downloadOptions.length} download methods for ${quality}...`);
                         
                         if (finalDownloadUrl && await validateVideoUrl(finalDownloadUrl)) {
                             return { url: finalDownloadUrl, method: option.title, priority: option.priority, success: true };
