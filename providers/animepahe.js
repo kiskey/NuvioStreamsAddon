@@ -73,11 +73,15 @@ ensureCacheDir();
 
 // --- Helper Functions ---
 async function fetchWithRetry(url, options = {}, maxRetries = MAX_RETRIES) {
+    const useProxy = process.env.ANIMEPAHE_USE_PROXY !== 'false';
     let lastError;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
+            // Apply proxy if enabled and URL is not already proxied
+            const requestUrl = useProxy && !url.includes(PROXY_URL) ? `${PROXY_URL}${url}` : url;
+            
             const response = await axios({
-                url,
+                url: requestUrl,
                 ...options,
                 headers: {
                     ...HEADERS,
@@ -246,8 +250,11 @@ async function getVideoLinks(animeSession, episodeSession) {
 async function extractPahe(url) {
     console.log(`[AnimePahe] extractPahe → Starting extraction for: ${url}`);
     try {
+        const useProxy = process.env.ANIMEPAHE_USE_PROXY !== 'false';
+        
         // Step 1: Get redirect location from /i endpoint
-        const redirectResponse = await axios.get(`${url}/i`, {
+        const redirectUrl = useProxy ? `${PROXY_URL}${url}/i` : `${url}/i`;
+        const redirectResponse = await axios.get(redirectUrl, {
             maxRedirects: 0,
             validateStatus: (status) => status >= 200 && status < 400,
             headers: HEADERS
@@ -263,7 +270,8 @@ async function extractPahe(url) {
         console.log(`[AnimePahe] Kwik URL: ${kwikUrl}`);
         
         // Step 2: Get the Kwik page content
-        const kwikResponse = await axios.get(kwikUrl, {
+        const kwikRequestUrl = useProxy ? `${PROXY_URL}${kwikUrl}` : kwikUrl;
+        const kwikResponse = await axios.get(kwikRequestUrl, {
             headers: {
                 ...HEADERS,
                 'Referer': 'https://kwik.cx/'
@@ -301,7 +309,8 @@ async function extractPahe(url) {
         const formData = new FormData();
         formData.append('_token', token);
         
-        const finalResponse = await axios.post(postUrl, formData, {
+        const postRequestUrl = useProxy ? `${PROXY_URL}${postUrl}` : postUrl;
+        const finalResponse = await axios.post(postRequestUrl, formData, {
             headers: {
                 ...HEADERS,
                 'Referer': kwikResponse.request.res.responseUrl,
@@ -372,7 +381,7 @@ function decryptPahe(fullString, key, v1, v2) {
 async function getAnimePaheStreams(tmdbId, title, mediaType, seasonNum = null, episodeNum = null, seasonTitle = null) {
     console.log(`[AnimePahe] Attempting to fetch streams for TMDB ID: ${tmdbId}, Type: ${mediaType}${mediaType === 'tv' ? `, S:${seasonNum}E:${episodeNum}` : ''}`);
     
-    const cacheKey = `animepahe_final_v1_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}e${episodeNum}` : ''}`;
+    const cacheKey = `animepahe_final_v2_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}e${episodeNum}` : ''}`;
 
     try {
         // 1. Check cache first
@@ -398,7 +407,7 @@ async function getAnimePaheStreams(tmdbId, title, mediaType, seasonNum = null, e
         // For TV shows, we need both season and episode numbers
         if (mediaType === 'tv' && (seasonNum === null || episodeNum === null)) {
             console.error('[AnimePahe] Missing season or episode number for TV show');
-            await saveToCache(cacheKey, []); // Cache empty result
+            await saveToCache(cacheKey, [], '', null, 259200); // Cache empty result with 3-day TTL
             return [];
         }
         
@@ -550,14 +559,14 @@ async function getAnimePaheStreams(tmdbId, title, mediaType, seasonNum = null, e
         
         console.log(`[AnimePahe] Found ${streams.length} streams`);
         
-        // Save to cache
-        await saveToCache(cacheKey, streams);
+        // Save to cache with 3-day TTL (259200 seconds)
+        await saveToCache(cacheKey, streams, '', null, 259200);
         
         return streams;
     } catch (error) {
         console.error(`[AnimePahe] Error getting streams: ${error.message}`);
-        // Cache empty result to prevent re-scraping
-        await saveToCache(cacheKey, []);
+        // Cache empty result to prevent re-scraping with 3-day TTL
+        await saveToCache(cacheKey, [], '', null, 259200);
         return [];
     }
 }
