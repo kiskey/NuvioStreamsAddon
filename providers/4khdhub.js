@@ -1,7 +1,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
-const { JSDOM } = require('jsdom');
+const cheerio = require('cheerio');
 const fs = require('fs').promises;
 const path = require('path');
 const RedisCache = require('../utils/redisCache');
@@ -156,8 +156,8 @@ function makeRequest(url, options = {}) {
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 if (options.parseHTML && data) {
-                    const dom = new JSDOM(data);
-                    resolve({ document: dom.window.document, body: data, statusCode: res.statusCode, headers: res.headers });
+                    const $ = cheerio.load(data);
+                    resolve({ $: $, body: data, statusCode: res.statusCode, headers: res.headers });
                 } else {
                     resolve({ body: data, statusCode: res.statusCode, headers: res.headers });
                 }
@@ -349,22 +349,108 @@ function cleanTitle(title) {
     }
 }
 
-// Normalize title for better matching
+// Enhanced title normalization with better handling of special cases
 function normalizeTitle(title) {
     return title
         .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')  // Remove special characters
-        .replace(/\s+/g, ' ')          // Normalize whitespace
+        // Handle common title variations
+        .replace(/&/g, 'and')           // & -> and
+        .replace(/\b(the|a|an)\b/g, '') // Remove articles
+        // Handle common abbreviations and expansions
+        .replace(/\bvs\b/g, 'versus')
+        .replace(/\bversus\b/g, 'vs')
+        .replace(/\bdr\b/g, 'doctor')
+        .replace(/\bdoctor\b/g, 'dr')
+        .replace(/\bmr\b/g, 'mister')
+        .replace(/\bmister\b/g, 'mr')
+        .replace(/\bst\b/g, 'saint')
+        .replace(/\bsaint\b/g, 'st')
+        .replace(/\bmt\b/g, 'mount')
+        .replace(/\bmount\b/g, 'mt')
+        .replace(/[^a-z0-9\s]/g, ' ')   // Remove special characters
+        .replace(/\s+/g, ' ')           // Normalize whitespace
         .trim();
 }
 
-// Calculate similarity between two strings using Levenshtein distance
+// Extract year from title if present
+function extractYear(title) {
+    const yearMatch = title.match(/\((19|20)\d{2}\)/);
+    return yearMatch ? parseInt(yearMatch[0].replace(/[()]/g, '')) : null;
+}
+
+// Remove year from title for cleaner comparison
+function removeYear(title) {
+    return title.replace(/\s*\((19|20)\d{2}\)\s*/g, ' ').trim();
+}
+
+// Generate alternative search queries for better matching
+function generateAlternativeQueries(title, originalTitle = null) {
+    const queries = new Set();
+    
+    // Add the original title
+    queries.add(title);
+    
+    // Add original title if different
+    if (originalTitle && originalTitle !== title) {
+        queries.add(originalTitle);
+    }
+    
+    // Remove year and try again
+    const titleWithoutYear = removeYear(title);
+    if (titleWithoutYear !== title) {
+        queries.add(titleWithoutYear);
+    }
+    
+    // Remove colons and other punctuation
+    queries.add(title.replace(/:/g, ''));
+    queries.add(title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim());
+    
+    // Handle common title variations
+    const variations = [
+        title.replace(/\bPart\s+(\d+)\b/gi, 'Part $1'),
+        title.replace(/\bPart\s+(\d+)\b/gi, '$1'),
+        title.replace(/\b(\d+)\b/g, match => {
+            const num = parseInt(match);
+            const romans = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+            return romans[num] || match;
+        }),
+        title.replace(/\b(I{1,3}|IV|V|VI{0,3}|IX|X)\b/g, match => {
+            const romans = { 'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5', 
+                           'VI': '6', 'VII': '7', 'VIII': '8', 'IX': '9', 'X': '10' };
+            return romans[match] || match;
+        })
+    ];
+    
+    variations.forEach(v => {
+        if (v && v !== title) queries.add(v);
+    });
+    
+    // Remove duplicates and filter out empty strings
+    return Array.from(queries).filter(q => q && q.trim().length > 0);
+}
+
+// Enhanced similarity calculation with multiple algorithms
 function calculateSimilarity(str1, str2) {
     const s1 = normalizeTitle(str1);
     const s2 = normalizeTitle(str2);
     
     if (s1 === s2) return 1.0;
     
+    // Levenshtein distance
+    const levenshtein = calculateLevenshteinSimilarity(s1, s2);
+    
+    // Jaccard similarity (word-based)
+    const jaccard = calculateJaccardSimilarity(s1, s2);
+    
+    // Longest common subsequence
+    const lcs = calculateLCSSimilarity(s1, s2);
+    
+    // Weighted combination of different similarity measures
+    return (levenshtein * 0.4) + (jaccard * 0.4) + (lcs * 0.2);
+}
+
+// Levenshtein distance similarity
+function calculateLevenshteinSimilarity(s1, s2) {
     const len1 = s1.length;
     const len2 = s2.length;
     
@@ -391,51 +477,130 @@ function calculateSimilarity(str1, str2) {
     return (maxLen - matrix[len1][len2]) / maxLen;
 }
 
-// Check if query words are contained in title
-function containsWords(title, query) {
-    const titleWords = normalizeTitle(title).split(' ');
-    const queryWords = normalizeTitle(query).split(' ');
+// Jaccard similarity for word-based comparison
+function calculateJaccardSimilarity(s1, s2) {
+    const words1 = new Set(s1.split(' ').filter(w => w.length > 0));
+    const words2 = new Set(s2.split(' ').filter(w => w.length > 0));
     
-    return queryWords.every(queryWord => 
-        titleWords.some(titleWord => 
-            titleWord.includes(queryWord) || queryWord.includes(titleWord)
-        )
-    );
+    const intersection = new Set([...words1].filter(w => words2.has(w)));
+    const union = new Set([...words1, ...words2]);
+    
+    return union.size === 0 ? 0 : intersection.size / union.size;
 }
 
-// Find best matching result from search results
-function findBestMatch(results, query) {
+// Longest Common Subsequence similarity
+function calculateLCSSimilarity(s1, s2) {
+    const len1 = s1.length;
+    const len2 = s2.length;
+    
+    if (len1 === 0 || len2 === 0) return 0;
+    
+    const dp = Array(len1 + 1).fill().map(() => Array(len2 + 1).fill(0));
+    
+    for (let i = 1; i <= len1; i++) {
+        for (let j = 1; j <= len2; j++) {
+            if (s1[i - 1] === s2[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+    
+    const maxLen = Math.max(len1, len2);
+    return dp[len1][len2] / maxLen;
+}
+
+// Enhanced word containment check with fuzzy matching
+function containsWords(title, query) {
+    const titleWords = normalizeTitle(title).split(' ').filter(w => w.length > 1);
+    const queryWords = normalizeTitle(query).split(' ').filter(w => w.length > 1);
+    
+    let matchedWords = 0;
+    
+    for (const queryWord of queryWords) {
+        const found = titleWords.some(titleWord => {
+            // Exact match
+            if (titleWord === queryWord) return true;
+            
+            // Substring match
+            if (titleWord.includes(queryWord) || queryWord.includes(titleWord)) return true;
+            
+            // Fuzzy match for longer words (allow 1 character difference)
+            if (queryWord.length > 3 && titleWord.length > 3) {
+                const similarity = calculateLevenshteinSimilarity(titleWord, queryWord);
+                return similarity > 0.8;
+            }
+            
+            return false;
+        });
+        
+        if (found) matchedWords++;
+    }
+    
+    // Require at least 70% of query words to be matched
+    return matchedWords / queryWords.length >= 0.7;
+}
+
+// Enhanced best match finder with improved scoring
+function findBestMatch(results, query, tmdbYear = null) {
     if (results.length === 0) return null;
     if (results.length === 1) return results[0];
+    
+    console.log(`[4KHDHub] Finding best match for: "${query}" (Year: ${tmdbYear || 'N/A'})`);
     
     // Score each result
     const scoredResults = results.map(result => {
         let score = 0;
+        // Use year from search result metadata if available, otherwise extract from title
+        const resultYear = result.year || extractYear(result.title);
+        const queryWithoutYear = removeYear(query);
+        const resultWithoutYear = removeYear(result.title);
         
-        // Exact match gets highest score
-        if (normalizeTitle(result.title) === normalizeTitle(query)) {
+        // Exact match gets highest score (without year)
+        if (normalizeTitle(resultWithoutYear) === normalizeTitle(queryWithoutYear)) {
             score += 100;
         }
         
-        // Similarity score (0-50 points)
-        const similarity = calculateSimilarity(result.title, query);
-        score += similarity * 50;
+        // Enhanced similarity score (0-60 points)
+        const similarity = calculateSimilarity(resultWithoutYear, queryWithoutYear);
+        score += similarity * 60;
         
-        // Word containment bonus (0-30 points)
+        // Word containment bonus (0-25 points)
         if (containsWords(result.title, query)) {
-            score += 30;
+            score += 25;
         }
         
-        // Prefer shorter titles (closer matches) (0-10 points)
-        const lengthDiff = Math.abs(result.title.length - query.length);
-        score += Math.max(0, 10 - lengthDiff / 5);
-        
-        // Year extraction bonus - prefer titles with years
-        if (result.title.match(/\((19|20)\d{2}\)/)) {
-            score += 5;
+        // Year matching bonus/penalty
+        if (tmdbYear && resultYear) {
+            if (tmdbYear === resultYear) {
+                score += 20; // Exact year match
+            } else if (Math.abs(tmdbYear - resultYear) <= 1) {
+                score += 10; // Close year match
+            } else if (Math.abs(tmdbYear - resultYear) > 5) {
+                score -= 15; // Significant year mismatch penalty
+            }
+        } else if (resultYear && !tmdbYear) {
+            score += 5; // Slight bonus for having year info
         }
         
-        return { ...result, score };
+        // Length similarity bonus (0-10 points)
+        const lengthDiff = Math.abs(resultWithoutYear.length - queryWithoutYear.length);
+        score += Math.max(0, 10 - lengthDiff / 3);
+        
+        // Prefer results with quality indicators
+        if (result.title.match(/\b(1080p|720p|4K|2160p|BluRay|WEB-DL)\b/i)) {
+            score += 3;
+        }
+        
+        // Penalty for results with too many extra words
+        const queryWordCount = queryWithoutYear.split(' ').filter(w => w.length > 0).length;
+        const resultWordCount = resultWithoutYear.split(' ').filter(w => w.length > 0).length;
+        if (resultWordCount > queryWordCount * 2) {
+            score -= 10;
+        }
+        
+        return { ...result, score, similarity, resultYear };
     });
     
     // Sort by score (highest first)
@@ -443,10 +608,17 @@ function findBestMatch(results, query) {
     
     console.log('[4KHDHub] Title matching scores:');
     scoredResults.slice(0, 5).forEach((result, index) => {
-        console.log(`${index + 1}. ${result.title} (Score: ${result.score.toFixed(1)})`);
+        console.log(`${index + 1}. ${result.title} (Score: ${result.score.toFixed(1)}, Similarity: ${(result.similarity * 100).toFixed(1)}%, Year: ${result.resultYear || 'N/A'})`);
     });
     
-    return scoredResults[0];
+    // Additional validation: ensure the best match has a reasonable score
+    const bestResult = scoredResults[0];
+    if (bestResult.score < 30) {
+        console.log(`[4KHDHub] Best match score too low (${bestResult.score.toFixed(1)}), rejecting`);
+        return null;
+    }
+    
+    return bestResult;
 }
 
 function extractHubCloudLinks(url, referer) {
@@ -455,7 +627,7 @@ function extractHubCloudLinks(url, referer) {
     
     return makeRequest(url, { parseHTML: true })
         .then(response => {
-            const document = response.document;
+            const $ = response.$;
             console.log(`[4KHDHub] Got HubCloud page, looking for download element...`);
             
             // Check if this is already a hubcloud.php URL
@@ -464,17 +636,17 @@ function extractHubCloudLinks(url, referer) {
                 href = url;
                 console.log(`[4KHDHub] Already a hubcloud.php URL: ${href}`);
             } else {
-                const downloadElement = document.querySelector('#download');
-                if (!downloadElement) {
+                const downloadElement = $('#download');
+                if (downloadElement.length === 0) {
                     console.log('[4KHDHub] Download element #download not found, trying alternatives...');
                     // Try alternative selectors
                     const alternatives = ['a[href*="hubcloud.php"]', '.download-btn', 'a[href*="download"]'];
                     let found = false;
                     
                     for (const selector of alternatives) {
-                        const altElement = document.querySelector(selector);
-                        if (altElement) {
-                            const rawHref = altElement.getAttribute('href');
+                        const altElement = $(selector).first();
+                        if (altElement.length > 0) {
+                            const rawHref = altElement.attr('href');
                             if (rawHref) {
                                 href = rawHref.startsWith('http') ? rawHref : `${baseUrl.replace(/\/$/, '')}/${rawHref.replace(/^\//, '')}`;
                                 console.log(`[4KHDHub] Found download link with selector ${selector}: ${href}`);
@@ -488,7 +660,7 @@ function extractHubCloudLinks(url, referer) {
                         throw new Error('Download element not found with any selector');
                     }
                 } else {
-                    const rawHref = downloadElement.getAttribute('href');
+                    const rawHref = downloadElement.attr('href');
                     if (!rawHref) {
                         throw new Error('Download href not found');
                     }
@@ -502,14 +674,14 @@ function extractHubCloudLinks(url, referer) {
             return makeRequest(href, { parseHTML: true });
         })
         .then(response => {
-            const document = response.document;
+            const $ = response.$;
             const results = [];
             
             console.log(`[4KHDHub] Processing HubCloud download page...`);
             
             // Extract quality and size information
-            const size = document.querySelector('i#size')?.textContent || '';
-            const header = document.querySelector('div.card-header')?.textContent || '';
+            const size = $('i#size').text() || '';
+            const header = $('div.card-header').text() || '';
             const quality = getIndexQuality(header);
             const headerDetails = cleanTitle(header);
             
@@ -521,19 +693,20 @@ function extractHubCloudLinks(url, referer) {
             // We'll build the title format later after getting actual filename from HEAD request
             
             // Find download buttons
-            const downloadButtons = document.querySelectorAll('div.card-body h2 a.btn');
+            const downloadButtons = $('div.card-body h2 a.btn');
             console.log(`[4KHDHub] Found ${downloadButtons.length} download buttons`);
             
             if (downloadButtons.length === 0) {
                 // Try alternative selectors for download buttons
                 const altSelectors = ['a.btn', '.btn', 'a[href]'];
                 for (const selector of altSelectors) {
-                    const altButtons = document.querySelectorAll(selector);
+                    const altButtons = $(selector);
                     if (altButtons.length > 0) {
                         console.log(`[4KHDHub] Found ${altButtons.length} buttons with alternative selector: ${selector}`);
-                        altButtons.forEach((btn, index) => {
-                            const link = btn.getAttribute('href');
-                            const text = btn.textContent;
+                        altButtons.each((index, btn) => {
+                            const $btn = $(btn);
+                            const link = $btn.attr('href');
+                            const text = $btn.text();
                             console.log(`[4KHDHub] Button ${index + 1}: ${text} -> ${link}`);
                         });
                         break;
@@ -541,10 +714,11 @@ function extractHubCloudLinks(url, referer) {
                 }
             }
             
-            const promises = Array.from(downloadButtons).map((button, index) => {
+            const promises = downloadButtons.get().map((button, index) => {
                 return new Promise((resolve) => {
-                    const link = button.getAttribute('href');
-                    const text = button.textContent;
+                    const $button = $(button);
+                    const link = $button.attr('href');
+                    const text = $button.text();
                     
                     console.log(`[4KHDHub] Processing button ${index + 1}: "${text}" -> ${link}`);
                     
@@ -880,14 +1054,25 @@ function searchContent(query) {
                 .then(response => ({ response, baseUrl }));
         })
         .then(({ response, baseUrl }) => {
-            const document = response.document;
+            const $ = response.$;
             const results = [];
             
-            const cards = document.querySelectorAll('div.card-grid a');
-            cards.forEach(card => {
-                const title = card.querySelector('h3')?.textContent;
-                const href = card.getAttribute('href');
-                const posterUrl = card.querySelector('img')?.getAttribute('src');
+            $('div.card-grid a').each((index, card) => {
+                const $card = $(card);
+                const title = $card.find('h3').text();
+                const href = $card.attr('href');
+                const posterUrl = $card.find('img').attr('src');
+                
+                // Extract year from movie-card-meta element
+                const metaElement = $card.find('.movie-card-meta');
+                let year = null;
+                if (metaElement.length > 0) {
+                    const metaText = metaElement.text().trim();
+                    const yearMatch = metaText.match(/(19|20)\d{2}/);
+                    if (yearMatch) {
+                        year = parseInt(yearMatch[0]);
+                    }
+                }
                 
                 if (title && href) {
                     // Convert relative URLs to absolute URLs
@@ -895,7 +1080,8 @@ function searchContent(query) {
                     results.push({
                         title: title.trim(),
                         url: absoluteUrl,
-                        poster: posterUrl || ''
+                        poster: posterUrl || '',
+                        year: year
                     });
                 }
             });
@@ -907,13 +1093,13 @@ function searchContent(query) {
 function loadContent(url) {
     return makeRequest(url, { parseHTML: true })
         .then(response => {
-            const document = response.document;
-            const title = document.querySelector('h1.page-title')?.textContent?.split('(')[0]?.trim() || '';
-            const poster = document.querySelector('meta[property="og:image"]')?.getAttribute('content') || '';
-            const tags = Array.from(document.querySelectorAll('div.mt-2 span.badge')).map(el => el.textContent);
-            const year = parseInt(document.querySelector('div.mt-2 span')?.textContent) || null;
-            const description = document.querySelector('div.content-section p.mt-4')?.textContent?.trim() || '';
-            const trailer = document.querySelector('#trailer-btn')?.getAttribute('data-trailer-url') || '';
+            const $ = response.$;
+            const title = $('h1.page-title').text().split('(')[0].trim() || '';
+            const poster = $('meta[property="og:image"]').attr('content') || '';
+            const tags = $('div.mt-2 span.badge').map((i, el) => $(el).text()).get();
+            const year = parseInt($('div.mt-2 span').text()) || null;
+            const description = $('div.content-section p.mt-4').text().trim() || '';
+            const trailer = $('#trailer-btn').attr('data-trailer-url') || '';
             
             const isMovie = tags.includes('Movies');
             
@@ -930,8 +1116,9 @@ function loadContent(url) {
             ];
             
             for (const selector of selectors) {
-                const links = Array.from(document.querySelectorAll(selector))
-                    .map(a => a.getAttribute('href'))
+                const links = $(selector)
+                    .map((i, a) => $(a).attr('href'))
+                    .get()
                     .filter(href => href && href.trim());
                 if (links.length > 0) {
                     hrefs = links;
@@ -942,8 +1129,9 @@ function loadContent(url) {
             
             if (hrefs.length === 0) {
                 console.log('[4KHDHub] No download links found. Available links on page:');
-                const allLinks = Array.from(document.querySelectorAll('a[href]'))
-                    .map(a => a.getAttribute('href'))
+                const allLinks = $('a[href]')
+                    .map((i, a) => $(a).attr('href'))
+                    .get()
                     .filter(href => href && href.includes('http'))
                     .slice(0, 10); // Show first 10 links
                 console.log(allLinks);
@@ -968,7 +1156,7 @@ function loadContent(url) {
                 const episodesMap = new Map();
                 
                 console.log(`[4KHDHub] Looking for episode structure...`);
-                const seasonItems = document.querySelectorAll('div.episodes-list div.season-item');
+                const seasonItems = $('div.episodes-list div.season-item');
                 console.log(`[4KHDHub] Found ${seasonItems.length} season items`);
                 
                 if (seasonItems.length === 0) {
@@ -982,7 +1170,7 @@ function loadContent(url) {
                     ];
                     
                     for (const selector of altSelectors) {
-                        const items = document.querySelectorAll(selector);
+                        const items = $(selector);
                         if (items.length > 0) {
                             console.log(`[4KHDHub] Found ${items.length} items with selector: ${selector}`);
                             break;
@@ -1002,19 +1190,22 @@ function loadContent(url) {
                         content.episodes = [];
                     }
                 } else {
-                    seasonItems.forEach(seasonElement => {
-                        const seasonText = seasonElement.querySelector('div.episode-number')?.textContent || '';
+                    seasonItems.each((i, seasonElement) => {
+                        const $seasonElement = $(seasonElement);
+                        const seasonText = $seasonElement.find('div.episode-number').text() || '';
                         const seasonMatch = seasonText.match(/S?([1-9][0-9]*)/); 
                         const season = seasonMatch ? parseInt(seasonMatch[1]) : null;
                         
-                        const episodeItems = seasonElement.querySelectorAll('div.episode-download-item');
-                        episodeItems.forEach(episodeItem => {
-                            const episodeText = episodeItem.querySelector('div.episode-file-info span.badge-psa')?.textContent || '';
+                        const episodeItems = $seasonElement.find('div.episode-download-item');
+                        episodeItems.each((j, episodeItem) => {
+                            const $episodeItem = $(episodeItem);
+                            const episodeText = $episodeItem.find('div.episode-file-info span.badge-psa').text() || '';
                             const episodeMatch = episodeText.match(/Episode-0*([1-9][0-9]*)/); 
                             const episode = episodeMatch ? parseInt(episodeMatch[1]) : null;
                             
-                            const episodeHrefs = Array.from(episodeItem.querySelectorAll('a'))
-                                .map(a => a.getAttribute('href'))
+                            const episodeHrefs = $episodeItem.find('a')
+                                .map((k, a) => $(a).attr('href'))
+                                .get()
                                 .filter(href => href && href.trim());
                             
                             if (season && episode && episodeHrefs.length > 0) {
@@ -1091,13 +1282,13 @@ function extractHubDriveLinks(url, referer) {
     
     return makeRequest(url, { parseHTML: true })
         .then(response => {
-            const document = response.document;
+            const $ = response.$;
             
             console.log(`[4KHDHub] Got HubDrive page, looking for download button...`);
             
             // Extract filename and size information
-            const size = document.querySelector('i#size')?.textContent || '';
-            const header = document.querySelector('div.card-header')?.textContent || '';
+            const size = $('i#size').text() || '';
+            const header = $('div.card-header').text() || '';
             const quality = getIndexQuality(header);
             const headerDetails = cleanTitle(header);
             
@@ -1112,9 +1303,9 @@ function extractHubDriveLinks(url, referer) {
                               .trim();
             
             // Use the exact selector from Kotlin code
-            const downloadBtn = document.querySelector('.btn.btn-primary.btn-user.btn-success1.m-1');
+            const downloadBtn = $('.btn.btn-primary.btn-user.btn-success1.m-1').first();
             
-            if (!downloadBtn) {
+            if (downloadBtn.length === 0) {
                 console.log('[4KHDHub] Primary download button not found, trying alternative selectors...');
                 // Try alternative selectors
                 const alternatives = [
@@ -1126,18 +1317,18 @@ function extractHubDriveLinks(url, referer) {
                 
                 let foundBtn = null;
                 for (const selector of alternatives) {
-                    foundBtn = document.querySelector(selector);
-                    if (foundBtn) {
+                    foundBtn = $(selector).first();
+                    if (foundBtn.length > 0) {
                         console.log(`[4KHDHub] Found download button with selector: ${selector}`);
                         break;
                     }
                 }
                 
-                if (!foundBtn) {
+                if (!foundBtn || foundBtn.length === 0) {
                     throw new Error('Download button not found with any selector');
                 }
                 
-                const href = foundBtn.getAttribute('href');
+                const href = foundBtn.attr('href');
                 if (!href) {
                     throw new Error('Download link not found');
                 }
@@ -1146,7 +1337,7 @@ function extractHubDriveLinks(url, referer) {
                 return processHubDriveLink(href, referer, filename, size, quality);
             }
             
-            const href = downloadBtn.getAttribute('href');
+            const href = downloadBtn.attr('href');
             if (!href) {
                 throw new Error('Download link not found');
             }
@@ -1321,7 +1512,7 @@ async function get4KHDHubStreams(tmdbId, type, season = null, episode = null) {
         console.log(`[4KHDHub] Starting search for TMDB ID: ${tmdbId}, Type: ${type}${season ? `, Season: ${season}` : ''}${episode ? `, Episode: ${episode}` : ''}`);
         
         // Create cache key for resolved file hosting URLs
-        const cacheKey = `4khdhub_resolved_urls_v1_${tmdbId}_${type}${season ? `_s${season}e${episode}` : ''}`;
+        const cacheKey = `4khdhub_resolved_urls_v2_${tmdbId}_${type}${season ? `_s${season}e${episode}` : ''}`;
         
         let streamingLinks = [];
         
@@ -1351,17 +1542,65 @@ async function get4KHDHubStreams(tmdbId, type, season = null, episode = null) {
             
             console.log(`[4KHDHub] TMDB Details: ${tmdbDetails.title} (${tmdbDetails.year || 'N/A'})`);
             
-            // Search using the actual title
+            // Enhanced search with fallback strategies
+            let searchResults = [];
+            let bestMatch = null;
+            
+            // Primary search using the actual title
             const searchQuery = tmdbDetails.title;
-            const searchResults = await searchContent(searchQuery);
-            console.log(`[4KHDHub] Found ${searchResults.length} search results`);
+            searchResults = await searchContent(searchQuery);
+            console.log(`[4KHDHub] Primary search found ${searchResults.length} results`);
+            
+            if (searchResults.length > 0) {
+                bestMatch = findBestMatch(searchResults, tmdbDetails.title, tmdbDetails.year);
+            }
+            
+            // Fallback search strategies if no good match found
+            if (!bestMatch && searchResults.length > 0) {
+                console.log(`[4KHDHub] No good match from primary search, trying fallback strategies...`);
+                
+                // Try search without year
+                const titleWithoutYear = removeYear(tmdbDetails.title);
+                if (titleWithoutYear !== tmdbDetails.title) {
+                    console.log(`[4KHDHub] Trying search without year: "${titleWithoutYear}"`);
+                    const fallbackResults = await searchContent(titleWithoutYear);
+                    if (fallbackResults.length > 0) {
+                        const fallbackMatch = findBestMatch(fallbackResults, tmdbDetails.title, tmdbDetails.year);
+                        if (fallbackMatch && (!bestMatch || fallbackMatch.score > bestMatch.score)) {
+                            bestMatch = fallbackMatch;
+                            searchResults = fallbackResults;
+                        }
+                    }
+                }
+                
+                // Try search with comprehensive alternative title formats
+                if (!bestMatch) {
+                    const alternativeQueries = generateAlternativeQueries(
+                        tmdbDetails.title, 
+                        tmdbDetails.original_title
+                    ).filter(query => query !== tmdbDetails.title); // Exclude the original title we already tried
+                    
+                    for (const altQuery of alternativeQueries) {
+                        console.log(`[4KHDHub] Trying alternative search: "${altQuery}"`);
+                        const altResults = await searchContent(altQuery);
+                        if (altResults.length > 0) {
+                            const altMatch = findBestMatch(altResults, tmdbDetails.title, tmdbDetails.year);
+                            if (altMatch && (!bestMatch || altMatch.score > bestMatch.score)) {
+                                bestMatch = altMatch;
+                                searchResults = altResults;
+                                console.log(`[4KHDHub] Found better match with query: "${altQuery}" (score: ${altMatch.score})`);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             
             if (searchResults.length === 0) {
+                console.log(`[4KHDHub] No search results found for any query variation`);
                 return [];
             }
             
-            // Find the best matching result using title similarity
-            const bestMatch = findBestMatch(searchResults, tmdbDetails.title);
             if (!bestMatch) {
                 console.log(`[4KHDHub] No suitable match found for: ${tmdbDetails.title}`);
                 return [];
