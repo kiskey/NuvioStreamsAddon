@@ -970,8 +970,8 @@ async function resolveSIDLinksParallel(sidUrls) {
 async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeNum = null) {
     console.log(`[MoviesMod] Attempting to fetch streams for TMDB ID: ${tmdbId}, Type: ${mediaType}${mediaType === 'tv' ? `, S:${seasonNum}E:${episodeNum}` : ''}`);
 
-    try {
-        const cacheKey = `moviesmod_final_v12_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}` : ''}`;
+        // Define a cache key based on the media type and ID. For series, cache per season.
+        const cacheKey = `moviesmod_final_v13_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}` : ''}`;
         let resolvedQualities = await getFromCache(cacheKey);
 
         if (resolvedQualities && !Array.isArray(resolvedQualities)) {
