@@ -942,7 +942,24 @@
 
             .cookie-config {
                 overflow: visible;
+                max-height: none;
+                max-height: none;
             }
+
+            /* Cookie section mobile fixes */
+            .cookie-form { grid-template-columns: 1fr !important; width: 100%; }
+            .cookie-form .button-group { flex-direction: column; width: 100%; }
+            .cookie-input { min-width: 0; }
+            .cookie-input-container { display: grid; grid-template-columns: 1fr !important; }
+            .inline-check-btn { width: 100%; margin-top: 0.5rem; }
+
+            /* Multi-cookie list cards should stack and wrap on small screens */
+            #multiCookieList { overflow-x: hidden; overflow-y: auto; max-height: 320px; }
+            #multiCookieList > div { flex-direction: column !important; align-items: stretch !important; }
+            #multiCookieList > div > div { min-width: 0; }
+            #multiCookieList > div > div:last-child { justify-content: space-between; }
+            #multiCookieList button { width: 100%; }
+            #multiCookieList * { word-break: break-word; }
         }
 
         /* Nuvio App Card Styles - Enhanced Eye-catching Version */
@@ -1164,10 +1181,10 @@
             padding: 1rem;
             border: 1px solid var(--border);
             position: relative;
-            overflow: hidden;
-            max-height: 700px;
+            overflow: visible;
+            max-height: none;
             opacity: 1;
-            transition: max-height 0.5s ease-in-out, opacity 0.3s ease-in-out, padding 0.5s ease-in-out;
+            transition: opacity 0.3s ease-in-out, padding 0.5s ease-in-out;
         }
 
         .cookie-config p {
@@ -1644,6 +1661,11 @@
             /* Green gradient for VidZee */
         }
 
+        /* MovieBox icon style */
+        .moviebox-icon {
+            background: linear-gradient(135deg, #ff6e40, #ff4081);
+        }
+
         /* Migration Tool Styles */
         .migration-tool-container {
             background-color: rgba(255, 100, 50, 0.1);
@@ -1997,6 +2019,11 @@
                         <span class="provider-detail">May contain 4K/DV/HDR</span>
                     </div>
                     <div class="provider-item">
+                        <div class="provider-icon moviebox-icon">🍿</div>
+                        <div class="provider-name">MovieBox</div>
+                        <span class="provider-detail">Auto Quality</span>
+                    </div>
+                    <div class="provider-item">
                         <div class="provider-icon vidsrc-icon">🎬</div>
                         <div class="provider-name">VidSrc</div>
                         <span class="provider-detail">Auto Quality</span>
@@ -2044,12 +2071,6 @@
                         <div class="provider-icon topmovies-icon">🎬</div>
                         <div class="provider-name">TopMovies</div>
                         <span class="provider-detail">Bollywood/indian contents</span>
-                    </div>
-                    <div class="provider-item">
-                        <div class="provider-icon animepahe-icon"
-                            style="background: linear-gradient(135deg, #ff6b6b, #ff8e8e);">🍥</div>
-                        <div class="provider-name">AnimePahe</div>
-                        <span class="provider-detail">High-quality anime (SUB/DUB)</span>
                     </div>
                 </div>
 
@@ -2138,6 +2159,23 @@
                         
                         <div class="provider-checkbox-item"
                             style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
+                        <div style="display: flex; align-items: center;">
+                            <input type="checkbox" id="providerMoviebox" name="providerSelect" value="moviebox"
+                                checked style="margin-right: 0.5rem; accent-color: var(--primary);">
+                            <label for="providerMoviebox" style="font-size: 0.9rem;">MovieBox <span
+                                    style="font-size: 0.75rem; color: var(--text-light);">(~6.0s)</span></label>
+                        </div>
+                        <select id="qualityMoviebox" name="providerQuality" data-provider="moviebox"
+                            class="provider-sort-select">
+                            <option value="all" selected>All Qualities</option>
+                            <option value="480p">480p &amp; Up</option>
+                            <option value="720p">720p &amp; Up</option>
+                            <option value="1080p">1080p &amp; Up</option>
+                        </select>
+                    </div>
+                    
+                    <div class="provider-checkbox-item"
+                        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
                             <div style="display: flex; align-items: center;">
                                 <input type="checkbox" id="providerVidzee" name="providerSelect" value="vidzee"
                                     checked="" style="margin-right: 0.5rem; accent-color: var(--primary);">
@@ -2300,22 +2338,6 @@
                                         style="font-size: 0.75rem; color: #ff8c00;">Bollywood/Indian</span></label>
                             </div>
                             <select id="qualityTopmovies" name="providerQuality" data-provider="topmovies"
-                                class="provider-sort-select">
-                                <option value="all">All</option>
-                                <option value="720p">720p+</option>
-                                <option value="1080p">1080p+</option>
-                            </select>
-                        </div>
-                        <div class="provider-checkbox-item"
-                            style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;">
-                            <div style="display: flex; align-items: center;">
-                                <input type="checkbox" id="providerAnimepahe" name="providerSelect" value="animepahe"
-                                    checked="" style="margin-right: 0.5rem; accent-color: var(--primary);">
-                                <label for="providerAnimepahe" style="font-size: 0.9rem;">AnimePahe <span
-                                        style="font-size: 0.75rem; color: var(--text-light);">(~7.5s)</span> <span
-                                        style="font-size: 0.75rem; color: #ff6b6b;">Anime SUB/DUB</span></label>
-                            </div>
-                            <select id="qualityAnimepahe" name="providerQuality" data-provider="animepahe"
                                 class="provider-sort-select">
                                 <option value="all">All</option>
                                 <option value="720p">720p+</option>
@@ -2556,7 +2578,7 @@
                     Developed by <a href="https://github.com/tapframe" target="_blank" class="github-link">TapFrame</a>
                 </div>
                 <div class="footer-text">
-                    v0.5.0_newtest
+                    v0.5.1
                 </div>
             </div>
         </div>

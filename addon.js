@@ -2017,7 +2017,7 @@ builder.defineStreamHandler(async (args) => {
 
         // Combine streams in the preferred provider order
         combinedRawStreams = [];
-        const providerOrder = ['ShowBox', 'UHDMovies', '4KHDHub', 'MoviesMod', 'TopMovies', 'DramaDrip', 'MoviesDrive', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'MP4Hydra', 'Cuevana', 'VidSrc', 'Vixsrc', 'MovieBox', 'AnimePahe'];
+		const providerOrder = ['ShowBox', 'MovieBox', 'UHDMovies', '4KHDHub', 'MoviesMod', 'TopMovies', 'DramaDrip', 'MoviesDrive', 'Hianime', 'Xprime.tv', 'HollyMovieHD', 'Soaper TV', 'VidZee', 'MP4Hydra', 'Cuevana', 'VidSrc', 'Vixsrc', 'AnimePahe'];
         providerOrder.forEach(providerKey => {
             if (streamsByProvider[providerKey] && streamsByProvider[providerKey].length > 0) {
                 combinedRawStreams.push(...streamsByProvider[providerKey]);
@@ -2456,7 +2456,7 @@ ${warningMessage}`;
     console.log("-------------------------------");
 
     // Check if 4KHDHub is not selected and add informational stream
-    const is4KHDHubSelected = selectedProvidersArray && selectedProvidersArray.includes('4khdhub');
+    const is4KHDHubSelected = !selectedProvidersArray || selectedProvidersArray.includes('4khdhub');
     if (!is4KHDHubSelected && ENABLE_4KHDHUB_PROVIDER) {
         console.log("[4KHDHub] Not selected by user - adding informational stream");
 
