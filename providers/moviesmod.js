@@ -12,6 +12,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const { findBestMatch } = require('string-similarity');
 const RedisCache = require('../utils/redisCache');
+const { followRedirectToFilePage, extractFinalDownloadFromFilePage } = require('../utils/linkResolver');
 
 // Dynamic import for axios-cookiejar-support
 let axiosCookieJarSupport = null;
@@ -971,7 +972,7 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
     console.log(`[MoviesMod] Attempting to fetch streams for TMDB ID: ${tmdbId}, Type: ${mediaType}${mediaType === 'tv' ? `, S:${seasonNum}E:${episodeNum}` : ''}`);
 
         // Define a cache key based on the media type and ID. For series, cache per season.
-        const cacheKey = `moviesmod_final_v14_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}` : ''}`;
+        const cacheKey = `moviesmod_final_v15_${tmdbId}_${mediaType}${seasonNum ? `_s${seasonNum}` : ''}`;
         let resolvedQualities = await getFromCache(cacheKey);
 
         if (resolvedQualities && !Array.isArray(resolvedQualities)) {
@@ -1079,34 +1080,15 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
 
                     // Process the cached driveseed redirect URL
                     if (driveseedRedirectUrl.includes('driveseed.org')) {
-                        // First, resolve the driveseed redirect URL to get the final file page URL
-                        const response = await makeRequest(driveseedRedirectUrl, {
-                            headers: {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                'Referer': 'https://links.modpro.blog/',
-                            }
+                        // Resolve redirect to final file page using shared util
+                        const resFollow = await followRedirectToFilePage({
+                            redirectUrl: driveseedRedirectUrl,
+                            get: (url, opts) => makeRequest(url, opts),
+                            log: console
                         });
-
-                    if (!downloadOptions || downloadOptions.length === 0) return null;
-
-                        let finalFilePageUrl = driveseedRedirectUrl;
-                        if (redirectMatch && redirectMatch[1]) {
-                            const finalPath = redirectMatch[1];
-                            finalFilePageUrl = `https://driveseed.org${finalPath}`;
-                            console.log(`[MoviesMod] Resolved redirect to final file page: ${finalFilePageUrl}`);
-                            
-                            // Load the final file page
-                            const finalResponse = await makeRequest(finalFilePageUrl, {
-                                headers: {
-                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                    'Referer': driveseedRedirectUrl,
-                                }
-                            });
-                            
-                            var $ = cheerio.load(finalResponse.data);
-                        } else {
-                            var $ = cheerio.load(response.data);
-                        }
+                        const $ = resFollow.$;
+                        const finalFilePageUrl = resFollow.finalFilePageUrl;
+                        console.log(`[MoviesMod] Resolved redirect to final file page: ${finalFilePageUrl}`);
 
                         // Extract file size and name information
                         let driveseedSize = 'Unknown';
@@ -1130,81 +1112,40 @@ async function getMoviesModStreams(tmdbId, mediaType, seasonNum = null, episodeN
                             }
                         }
 
-                        // Extract download options
-                        const downloadOptions = [];
-
-                        // Find Resume Cloud button (primary)
-                        const resumeCloudLink = $('a:contains("Resume Cloud")').attr('href');
-                        if (resumeCloudLink) {
-                            downloadOptions.push({
-                                title: 'Resume Cloud',
-                                type: 'resume',
-                                url: `https://driveseed.org${resumeCloudLink}`,
-                                priority: 1
-                            });
-                        }
-
-                        // Find Resume Worker Bot (fallback)
-                        const workerSeedLink = $('a:contains("Resume Worker Bot")').attr('href');
-                        if (workerSeedLink) {
-                            downloadOptions.push({
-                                title: 'Resume Worker Bot',
-                                type: 'worker',
-                                url: workerSeedLink,
-                                priority: 2
-                            });
-                        }
-
-                        // Find Instant Download (final fallback)
-                        const instantDownloadLink = $('a:contains("Instant Download")').attr('href');
-                        if (instantDownloadLink) {
-                            downloadOptions.push({
-                                title: 'Instant Download',
-                                type: 'instant',
-                                url: instantDownloadLink,
-                                priority: 3
-                            });
-                        }
-
-                        // Sort by priority
-                        downloadOptions.sort((a, b) => a.priority - b.priority);
-
                         if (fileName && processedFileNames.has(fileName)) {
                             console.log(`[MoviesMod] Skipping duplicate file: ${fileName}`);
                             return null;
                         }
                         if (fileName) processedFileNames.add(fileName);
+                        // Use shared util to extract the final URL from file page
+                        const origin = new URL(finalFilePageUrl).origin;
+                        const finalDownloadUrl = await extractFinalDownloadFromFilePage($, {
+                            origin,
+                            get: (url, opts) => makeRequest(url, opts),
+                            post: (url, data, opts) => axios.post(MOVIESMOD_PROXY_URL ? `${MOVIESMOD_PROXY_URL}${encodeURIComponent(url)}` : url, data, opts),
+                            validate: (url) => validateVideoUrl(url),
+                            log: console
+                        });
 
-                        if (!downloadOptions || downloadOptions.length === 0) return null;
-
-                        // Try all download methods in parallel (racing approach)
-                        console.log(`[MoviesMod] Racing ${downloadOptions.length} download methods for ${quality}...`);
-                        
-                        if (finalDownloadUrl && await validateVideoUrl(finalDownloadUrl)) {
-                            return { url: finalDownloadUrl, method: option.title, priority: option.priority, success: true };
+                        if (!finalDownloadUrl) {
+                            console.log(`[MoviesMod] ✗ Could not extract final link for ${quality}`);
+                            return null;
                         }
-                        return { success: false, method: option.title };
-                    });
-                    
-                    const raceResults = await Promise.allSettled(methodPromises);
-                    const successful = raceResults
-                        .filter(r => r.status === 'fulfilled' && r.value.success)
-                        .map(r => r.value)
-                        .sort((a, b) => a.priority - b.priority);
-
-                    if (successful.length === 0) return null;
-                    const selectedResult = successful[0];
 
                     const actualQuality = extractQuality(quality);
                     const techDetails = getTechDetails(quality);
                     const techDetailsString = techDetails.length > 0 ? ` • ${techDetails.join(' • ')}` : '';
 
-                    return {
-                        name: `MoviesMod\n${actualQuality}`,
-                        title: `${fileName.replace(/\.[^/.]+$/, "").replace(/[._]/g, ' ')}\n${size || ''}${techDetailsString}`,
-                        url: selectedResult.url,
-                        quality: actualQuality,
-                    };
+                        return {
+                            name: `MoviesMod\n${actualQuality}`,
+                            title: `${cleanFileName}\n${sizeInfo || ''}${techDetailsString}`,
+                            url: finalDownloadUrl,
+                            quality: actualQuality,
+                        };
+                    } else {
+                        console.warn(`[MoviesMod] Unsupported URL type for final processing: ${currentUrl}`);
+                        return null;
+                    }
                 } catch (e) {
                     console.error(`[MoviesMod] Error processing target link ${targetLink.url}: ${e.message}`);
                     return null;
