@@ -19,15 +19,51 @@ function cleanTitle(title) {
     "x264", "x265", "H264", "HEVC", "AVC"
   ];
 
-  const startIndex = parts.findIndex(part => qualityTags.some(tag => part.toLowerCase().includes(tag.toLowerCase())));
-  const endIndex = (() => {
-    let idx = -1;
-    parts.forEach((part, i) => {
-      if (
-        subTags.some(tag => part.toLowerCase().includes(tag.toLowerCase())) ||
-        audioTags.some(tag => part.toLowerCase().includes(tag.toLowerCase())) ||
-        codecTags.some(tag => part.toLowerCase().includes(tag.toLowerCase()))
-      ) idx = i;
+// --- Default extractors (can be used directly or replaced by providers) ---
+
+async function defaultTryInstantDownload($, { post, origin, log = console }) {
+  const allInstant = $('a:contains("Instant Download"), a:contains("Instant")');
+  log.log(`[LinkResolver] defaultTryInstantDownload: found ${allInstant.length} matching anchor(s).`);
+  const instantLink = allInstant.attr('href');
+  if (!instantLink) {
+    log.log('[LinkResolver] defaultTryInstantDownload: no href on element.');
+    return null;
+  }
+
+  try {
+    // Check if it's already a direct CDN download link (no API call needed)
+    // Common patterns: cdn.video-leech.pro, workers.dev, or other direct download hosts
+    if (instantLink.includes('cdn.video-leech.pro') ||
+      instantLink.includes('workers.dev') ||
+      instantLink.includes('.r2.dev') ||
+      (instantLink.startsWith('http') && !instantLink.includes('?url='))) {
+      // This is a direct download link, validate and return it
+      log.log('[LinkResolver] defaultTryInstantDownload: found direct CDN link');
+      let finalUrl = instantLink;
+      // Fix spaces in URLs if needed
+      if (finalUrl.includes('workers.dev') || finalUrl.includes('.r2.dev')) {
+        const parts = finalUrl.split('/');
+        const fn = parts[parts.length - 1];
+        parts[parts.length - 1] = fn.replace(/ /g, '%20');
+        finalUrl = parts.join('/');
+      }
+      return finalUrl;
+    }
+
+    // Otherwise, try the API-style extraction (with ?url= parameter)
+    const urlObj = new URL(instantLink, origin);
+    const keys = new URLSearchParams(urlObj.search).get('url');
+    if (!keys) {
+      log.log('[LinkResolver] defaultTryInstantDownload: no url parameter found, returning direct link');
+      return instantLink; // Fallback to direct link
+    }
+
+    const apiUrl = `${urlObj.origin}/api`;
+    const formData = new FormData();
+    formData.append('keys', keys);
+
+    const resp = await post(apiUrl, formData, {
+      headers: { ...formData.getHeaders(), 'x-token': urlObj.hostname }
     });
     return idx;
   })();
@@ -249,7 +285,24 @@ async function extractFinalDownloadFromFilePage($, {
       if (instant.length > 0) {
         const href = $(instant[0]).attr('href');
         if (href) {
-          // Use same logic as Kotlin: POST to <host>/api with x-token = host
+          // Check if it's a direct CDN download link first
+          if (href.includes('cdn.video-leech.pro') ||
+            href.includes('workers.dev') ||
+            href.includes('.r2.dev') ||
+            (href.startsWith('http') && !href.includes('?url='))) {
+            log.log('[LinkResolver] tryDriveseedButtons: found direct CDN Instant Download link');
+            let finalUrl = href;
+            // Fix spaces in URLs if needed
+            if (finalUrl.includes('workers.dev') || finalUrl.includes('.r2.dev')) {
+              const parts = finalUrl.split('/');
+              const fn = parts[parts.length - 1];
+              parts[parts.length - 1] = fn.replace(/ /g, '%20');
+              finalUrl = parts.join('/');
+            }
+            return await getFirstValid([finalUrl]);
+          }
+
+          // Otherwise, use API-style extraction: POST to <host>/api with x-token = host
           try {
             const urlObj = new URL(href, origin);
             const keys = new URLSearchParams(urlObj.search).get('url');
@@ -263,6 +316,10 @@ async function extractFinalDownloadFromFilePage($, {
               if (resp && resp.data && resp.data.url) {
                 return await getFirstValid([resp.data.url]);
               }
+            } else {
+              // No url parameter but has href, try it directly
+              log.log('[LinkResolver] tryDriveseedButtons: no url param, trying href directly');
+              return await getFirstValid([href]);
             }
           } catch (e) {
             log.log(`[LinkResolver] Instant Download error: ${e.message}`);
