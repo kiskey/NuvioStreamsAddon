@@ -2,26 +2,17 @@ const cheerio = require('cheerio');
 const { URL, URLSearchParams } = require('url');
 const FormData = require('form-data');
 
-function cleanTitle(title) {
-  if (!title) return '';
-  const parts = title.split(/\.|-|_/);
-  const qualityTags = [
-    "WEBRip", "WEB-DL", "WEB", "BluRay", "HDRip", "DVDRip", "HDTV",
-    "CAM", "TS", "R5", "DVDScr", "BRRip", "BDRip", "DVD", "PDTV", "HD"
-  ];
-  const audioTags = [
-    "AAC", "AC3", "DTS", "MP3", "FLAC", "DD5", "EAC3", "Atmos"
-  ];
-  const subTags = [
-    "ESub", "ESubs", "Subs", "MultiSub", "NoSub", "EnglishSub", "HindiSub"
-  ];
-  const codecTags = [
-    "x264", "x265", "H264", "HEVC", "AVC"
-  ];
+// Debug logging flag - set DEBUG=true to enable verbose logging
+const DEBUG = process.env.DEBUG === 'true' || process.env.LINKRESOLVER_DEBUG === 'true';
+const defaultLog = DEBUG ? console : { log: () => {}, warn: () => {} };
+
+// Shared helpers for resolving driveseed/driveleech style redirects and extracting final download URLs.
+// This util is proxy-agnostic: providers must inject their own network functions and validators.
+// All functions accept injected dependencies so proxy, cookies, and caching stay in provider code.
 
 // --- Default extractors (can be used directly or replaced by providers) ---
 
-async function defaultTryInstantDownload($, { post, origin, log = console }) {
+async function defaultTryInstantDownload($, { post, origin, log = defaultLog }) {
   const allInstant = $('a:contains("Instant Download"), a:contains("Instant")');
   log.log(`[LinkResolver] defaultTryInstantDownload: found ${allInstant.length} matching anchor(s).`);
   const instantLink = allInstant.attr('href');
@@ -240,7 +231,48 @@ async function extractFinalDownloadFromFilePage($, {
   return null;
 }
 
-async function followRedirectToFilePage({ redirectUrl, get, log = console }) {
+async function defaultTryResumeCloud($, { origin, get, validate, log = defaultLog }) {
+  let resumeAnchor = $('a:contains("Resume Cloud"), a:contains("Cloud Resume Download"), a:contains("Resume Worker Bot"), a:contains("Worker")');
+  log.log(`[LinkResolver] defaultTryResumeCloud: found ${resumeAnchor.length} candidate button(s).`);
+
+  if (resumeAnchor.length === 0) {
+    // Try direct links on page
+    const direct = $('a[href*="workers.dev"], a[href*="workerseed"], a[href*="worker"], a[href*="driveleech.net/d/"], a[href*="driveseed.org/d/"]').attr('href');
+    if (direct) {
+      const ok = validate ? await validate(direct) : true;
+      if (ok) return direct;
+    }
+    return null;
+  }
+
+  const href = resumeAnchor.attr('href');
+  if (!href) return null;
+
+  if (href.startsWith('http') || href.includes('workers.dev')) {
+    const ok = validate ? await validate(href) : true;
+    return ok ? href : null;
+  }
+
+  try {
+    const resumeUrl = new URL(href, origin).href;
+    const res = await get(resumeUrl, { maxRedirects: 10 });
+    const $$ = cheerio.load(res.data);
+    let finalDownloadLink = $$('a.btn-success[href*="workers.dev"], a[href*="workerseed"], a[href*="worker"], a[href*="driveleech.net/d/"], a[href*="driveseed.org/d/"]').attr('href');
+    if (!finalDownloadLink) {
+      finalDownloadLink = $$('a[href*="workers.dev"], a[href*="workerseed"], a[href*="worker"], a[href*="driveleech.net/d/"], a[href*="driveseed.org/d/"]').first().attr('href');
+    }
+    if (!finalDownloadLink) return null;
+    const ok = validate ? await validate(finalDownloadLink) : true;
+    return ok ? finalDownloadLink : null;
+  } catch (e) {
+    log.log(`[LinkResolver] defaultTryResumeCloud error: ${e.message}`);
+    return null;
+  }
+}
+
+// --- Core steps ---
+
+async function followRedirectToFilePage({ redirectUrl, get, log = defaultLog }) {
   const res = await get(redirectUrl, { maxRedirects: 10 });
   let $ = cheerio.load(res.data);
   const scriptContent = $('script').html();
@@ -261,7 +293,7 @@ async function extractFinalDownloadFromFilePage($, {
   get,
   post,
   validate,
-  log = console,
+  log = defaultLog,
   tryResumeCloud = defaultTryResumeCloud,
   tryInstantDownload = defaultTryInstantDownload
 }) {
@@ -452,7 +484,7 @@ async function extractFinalDownloadFromFilePage($, {
 
 // Resolve SID (tech.unblockedgames.world etc.) to intermediate redirect (driveleech/driveseed)
 // createSession(jar) must return an axios-like instance with get/post that respects proxy and cookie jar
-async function resolveSidToRedirect({ sidUrl, createSession, jar, log = console }) {
+async function resolveSidToRedirect({ sidUrl, createSession, jar, log = defaultLog }) {
   const session = await createSession(jar);
   // Step 0
   const step0 = await session.get(sidUrl);
